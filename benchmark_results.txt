@@ -1,0 +1,17 @@
+======================================================================
+BENCHMARK RESULTS — comparison counts from real DB task data
+======================================================================
+
+  Size     InsSort    BinSrch(W)    BinSrch(M)    LinSrch(W)    LinSrch(B)
+             comps         comps         comps         comps         comps
+----------------------------------------------------------------------
+     7          12             3             1             7             1
+   500      42,082             9             8           500             1
+  3000   1,501,499            12            11          3000             1
+
+Legend:
+  InsSort      = insertion_sort_count comparisons (sort by priority rank)
+  BinSrch(W)   = binary_search_count searching last element (near worst case)
+  BinSrch(M)   = binary_search_count searching middle element
+  LinSrch(W)   = linear_search_count on absent target (true worst case = N)
+  LinSrch(B)   = linear_search_count on first element (best case = 1)

@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TaskFlow — Task Manager</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       STICKY HEADER
+       ═══════════════════════════════════════════════════════════════════ -->
+  <header class="site-header" role="banner">
+    <div class="header-inner">
+      <h1 class="site-title">
+        <span class="site-icon" aria-hidden="true">✦</span>
+        TaskFlow
+      </h1>
+      <p id="header-status" class="header-status" aria-live="polite" aria-atomic="true"></p>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       BREADCRUMB
+       ═══════════════════════════════════════════════════════════════════ -->
+  <nav class="breadcrumb" aria-label="Current selection">
+    <span id="bc-user"    class="bc-item bc-user"    data-empty="No user selected">No user selected</span>
+    <span class="bc-sep"  aria-hidden="true">›</span>
+    <span id="bc-project" class="bc-item bc-project" data-empty="No project selected">No project selected</span>
+    <span class="bc-sep"  aria-hidden="true">›</span>
+    <span id="bc-tasks"   class="bc-item bc-tasks"   data-empty="Tasks">Tasks</span>
+  </nav>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       GLOBAL ALERT BANNER
+       ═══════════════════════════════════════════════════════════════════ -->
+  <div id="alert-banner" class="alert-banner" role="alert"
+       aria-live="assertive" hidden>
+    <span id="alert-text"></span>
+    <button id="alert-close" class="alert-close" aria-label="Dismiss alert" hidden>✕</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       THREE-PANEL WORKSPACE
+       ═══════════════════════════════════════════════════════════════════ -->
+  <div class="workspace">
+
+    <!-- ─────────────────────────────────────────────────────────────────
+         PANEL 1 — USERS
+         ───────────────────────────────────────────────────────────────── -->
+    <aside class="panel panel-users" aria-label="Users panel">
+      <div class="panel-header">
+        <h2 class="panel-title">Users</h2>
+        <button id="btn-toggle-user-form"
+                class="btn btn-icon-only btn-add"
+                aria-expanded="false"
+                aria-controls="user-create-form"
+                title="Add new user">+</button>
+      </div>
+
+      <div id="user-create-form" class="create-form" hidden>
+        <div class="form-heading-row">
+          <h3 class="form-sub-heading">New User</h3>
+          <button type="button" id="btn-close-user-form" class="btn-form-close" aria-label="Close form">✕</button>
+        </div>
+        <form id="form-new-user" novalidate>
+          <div class="field-group">
+            <label for="u-name">Name <span aria-hidden="true">*</span></label>
+            <input type="text" id="u-name" placeholder="Alice"
+                   autocomplete="off" aria-required="true"
+                   aria-describedby="u-name-err" />
+            <span id="u-name-err" class="field-error" role="alert" aria-live="polite"></span>
+          </div>
+          <div class="field-group">
+            <label for="u-email">Email <span aria-hidden="true">*</span></label>
+            <input type="email" id="u-email" placeholder="alice@example.com"
+                   autocomplete="off" aria-required="true"
+                   aria-describedby="u-email-err" />
+            <span id="u-email-err" class="field-error" role="alert" aria-live="polite"></span>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary btn-sm">Create User</button>
+            <button type="button" id="btn-cancel-user" class="btn btn-secondary btn-sm">Cancel</button>
+          </div>
+        </form>
+      </div>
+
+      <ul id="user-list" class="entity-list" aria-label="User list">
+        <li class="entity-empty">Loading users…</li>
+      </ul>
+    </aside>
+
+    <!-- ─────────────────────────────────────────────────────────────────
+         PANEL 2 — PROJECTS
+         ───────────────────────────────────────────────────────────────── -->
+    <aside class="panel panel-projects" aria-label="Projects panel">
+      <div class="panel-header">
+        <h2 class="panel-title">Projects</h2>
+        <button id="btn-toggle-project-form"
+                class="btn btn-icon-only btn-add"
+                aria-expanded="false"
+                aria-controls="project-create-form"
+                title="Add new project"
+                disabled>+</button>
+      </div>
+
+      <div id="project-create-form" class="create-form" hidden>
+        <div class="form-heading-row">
+          <h3 class="form-sub-heading">New Project</h3>
+          <button type="button" id="btn-close-project-form" class="btn-form-close" aria-label="Close form">✕</button>
+        </div>
+        <form id="form-new-project" novalidate>
+          <div class="field-group">
+            <label for="p-title">Title <span aria-hidden="true">*</span></label>
+            <input type="text" id="p-title" placeholder="Project title"
+                   autocomplete="off" aria-required="true"
+                   aria-describedby="p-title-err" />
+            <span id="p-title-err" class="field-error" role="alert" aria-live="polite"></span>
+          </div>
+          <div class="field-group">
+            <label for="p-desc">Description</label>
+            <textarea id="p-desc" rows="2" placeholder="Optional description"></textarea>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary btn-sm">Create Project</button>
+            <button type="button" id="btn-cancel-project" class="btn btn-secondary btn-sm">Cancel</button>
+          </div>
+        </form>
+      </div>
+
+      <ul id="project-list" class="entity-list" aria-label="Project list">
+        <li class="entity-empty">Select a user to see projects.</li>
+      </ul>
+    </aside>
+
+    <!-- ─────────────────────────────────────────────────────────────────
+         PANEL 3 — TASKS
+         ───────────────────────────────────────────────────────────────── -->
+    <section class="panel panel-tasks" aria-label="Tasks panel">
+      <div class="panel-header">
+        <h2 class="panel-title">Tasks</h2>
+        <button id="btn-toggle-task-form"
+                class="btn btn-icon-only btn-add"
+                aria-expanded="false"
+                aria-controls="task-create-form"
+                title="Add new task"
+                disabled>+</button>
+      </div>
+
+      <div id="task-create-form" class="create-form" hidden>
+        <div class="form-heading-row">
+          <h3 class="form-sub-heading">New Task</h3>
+          <button type="button" id="btn-close-task-form" class="btn-form-close" aria-label="Close form">✕</button>
+        </div>
+        <form id="form-new-task" novalidate>
+          <div class="field-group">
+            <label for="t-title">Title <span aria-hidden="true">*</span></label>
+            <input type="text" id="t-title" placeholder="Task title"
+                   autocomplete="off" aria-required="true"
+                   aria-describedby="t-title-err" />
+            <span id="t-title-err" class="field-error" role="alert" aria-live="polite"></span>
+          </div>
+          <div class="field-group">
+            <label for="t-desc">Description</label>
+            <input type="text" id="t-desc" placeholder="Optional description" autocomplete="off" />
+          </div>
+          <div class="field-row">
+            <div class="field-group">
+              <label for="t-priority">Priority</label>
+              <select id="t-priority">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="t-due">Due date</label>
+              <div class="date-picker-wrap">
+                <input type="date" id="t-due" autocomplete="off" />
+                <span class="date-icon" aria-hidden="true">📅</span>
+              </div>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary btn-sm">Add Task</button>
+            <button type="button" id="btn-cancel-task" class="btn btn-secondary btn-sm">Cancel</button>
+          </div>
+        </form>
+
+        <!-- AI Quick-Add -->
+        <div class="quickadd-section">
+          <h3 class="form-sub-heading">AI Quick-Add</h3>
+          <form id="form-quick-add" novalidate>
+            <div class="field-group">
+              <label for="qa-desc">Description (plain English)</label>
+              <input type="text" id="qa-desc"
+                     placeholder="Finish the report next Friday, it's urgent"
+                     autocomplete="off"
+                     aria-describedby="qa-desc-err" />
+              <span id="qa-desc-err" class="field-error" role="alert" aria-live="polite"></span>
+            </div>
+            <button type="submit" class="btn btn-accent btn-sm">✦ Quick-Add</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Task controls: search + filter + sort -->
+      <div class="task-controls">
+        <div class="search-row">
+          <input type="search" id="task-search"
+                 placeholder="Search by exact title…"
+                 aria-label="Search tasks by title" />
+          <select id="search-algo" aria-label="Search algorithm">
+            <option value="binary">Binary search</option>
+            <option value="linear">Linear search</option>
+          </select>
+          <button id="btn-search" class="btn btn-secondary btn-sm">Search</button>
+          <button id="btn-search-clear" class="btn btn-ghost btn-sm" hidden>✕ Clear</button>
+        </div>
+
+        <div class="filter-sort-row">
+          <label for="filter-status">Status:</label>
+          <select id="filter-status">
+            <option value="all">All</option>
+            <option value="todo">To Do</option>
+            <option value="in_progress">In Progress</option>
+            <option value="done">Done</option>
+          </select>
+
+          <label for="filter-priority">Priority:</label>
+          <select id="filter-priority">
+            <option value="all">All</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+
+          <label for="sort-by">Sort:</label>
+          <select id="sort-by">
+            <option value="">Default</option>
+            <option value="priority">Priority</option>
+            <option value="due_date">Due date</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Project stats bar -->
+      <div id="project-stats" class="project-stats" hidden>
+        <span id="stat-total" class="stat-chip"></span>
+        <span id="stat-todo"  class="stat-chip stat-todo"></span>
+        <span id="stat-ip"    class="stat-chip stat-ip"></span>
+        <span id="stat-done"  class="stat-chip stat-done"></span>
+      </div>
+
+      <!-- Task list -->
+      <ul id="task-list" class="task-list" aria-label="Tasks">
+        <li class="entity-empty">Select a project to see tasks.</li>
+      </ul>
+    </section>
+
+  </div><!-- /.workspace -->
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       EDIT TASK MODAL
+       ═══════════════════════════════════════════════════════════════════ -->
+  <dialog id="edit-modal" class="edit-modal" aria-label="Edit task">
+    <div class="modal-header">
+      <h2 class="modal-title">Edit Task</h2>
+      <button id="modal-close-x" class="btn btn-icon-only modal-x" aria-label="Close">✕</button>
+    </div>
+
+    <form id="edit-form" method="dialog">
+      <input type="hidden" id="edit-task-id" />
+
+      <div class="field-group">
+        <label for="edit-title">Title <span aria-hidden="true">*</span></label>
+        <input type="text" id="edit-title" placeholder="Task title"
+               aria-required="true" aria-describedby="edit-title-err" />
+        <span id="edit-title-err" class="field-error" role="alert" aria-live="polite"></span>
+      </div>
+
+      <div class="field-group">
+        <label for="edit-desc">Description</label>
+        <input type="text" id="edit-desc" placeholder="Optional" />
+      </div>
+
+      <div class="field-row">
+        <div class="field-group">
+          <label for="edit-priority">Priority</label>
+          <select id="edit-priority">
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="edit-status">Status</label>
+          <select id="edit-status">
+            <option value="todo">To Do</option>
+            <option value="in_progress">In Progress</option>
+            <option value="done">Done</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label for="edit-due">Due date</label>
+        <div class="date-picker-wrap">
+          <input type="date" id="edit-due" />
+          <span class="date-icon" aria-hidden="true">📅</span>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="submit" id="edit-save-btn" class="btn btn-primary">Save changes</button>
+        <button type="button" id="edit-cancel-btn" class="btn btn-secondary">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Toast notification stack -->
+  <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
