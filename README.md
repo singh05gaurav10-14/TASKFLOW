@@ -509,6 +509,7 @@ Zero-shot was chosen for three reasons:
 These outputs are produced by `mock_parser.parse()`.  Verify with:
 
 ```bash
+# Run from the backend/ directory (or taskflow/ root with path adjusted)
 python -c "from mock_parser import parse; import json; print(json.dumps(parse('YOUR INPUT'), indent=2))"
 ```
 
@@ -516,31 +517,37 @@ python -c "from mock_parser import parse; import json; print(json.dumps(parse('Y
 ```json
 { "title": "This is , mark it  please", "priority": "high", "due_date_hint": null }
 ```
-Both "urgent" and "ASAP" stripped (group-i keywords). Priority = high.
+Both "urgent" and "ASAP" stripped (both are group-i keywords). Priority = high
+because group-i matched first. No date keyword present.
 
-**Input 2:** `"Whenever you can, review the docs next monday"`
+**Input 2:** `" "` *(whitespace only)*
 ```json
-{ "title": "you can, review the docs", "priority": "low", "due_date_hint": "next monday" }
+{ "title": "Untitled task", "priority": "medium", "due_date_hint": null }
 ```
-"whenever" → group-ii → low. "next monday" stripped as a two-word phrase.
+No keyword matches. Stripped result is empty, so title falls back to the
+placeholder `"Untitled task"`. Priority defaults to medium.
 
 **Input 3:** `"Finish the report next Friday, it's urgent"`
 ```json
 { "title": "Finish the report , it's", "priority": "high", "due_date_hint": "next friday" }
 ```
-"urgent" → high. "next Friday" matched as two-word phrase before bare-weekday pass.
+"urgent" → group-i → priority = high. "next Friday" matched as one whole
+two-word phrase before the bare-weekday pass; both "urgent" and "next friday"
+spans stripped from the title.
 
 **Input 4:** `"tomorrow review tomorrow"`
 ```json
 { "title": "review", "priority": "medium", "due_date_hint": "tomorrow" }
 ```
-No priority keyword → medium. Both occurrences of "tomorrow" stripped.
+No priority keyword → medium. "tomorrow" matched on the first date-phrase check;
+every occurrence (both instances) stripped, leaving only "review".
 
-**Input 5:** `"Update the database schema"`
+**Input 5:** `"Whenever you can, review the docs next monday"`
 ```json
-{ "title": "Update the database schema", "priority": "medium", "due_date_hint": null }
+{ "title": "you can, review the docs", "priority": "low", "due_date_hint": "next monday" }
 ```
-No keywords matched. Title unchanged.
+"whenever" → group-ii → priority = low. "next monday" matched as a two-word
+phrase and stripped. "whenever" also stripped from the title.
 
 ---
 
