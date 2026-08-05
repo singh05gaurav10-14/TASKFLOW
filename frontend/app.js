@@ -1,8 +1,5 @@
 /* ==========================================================================
-   app.js — TaskFlow three-panel UI (User → Project → Task)
-   - All user-supplied text is set via textContent (never innerHTML).
-   - All interactions use addEventListener (no inline onclick).
-   - ORM relationships used via /users/{id}/projects and /projects/{id}/tasks.
+   app.js — TaskFlow  |  Mobile master-detail + Desktop 3-column
    ========================================================================== */
 "use strict";
 
@@ -10,30 +7,83 @@
 const API_BASE = "http://127.0.0.1:8000";
 
 /* ── App state ──────────────────────────────────────────────────────────── */
-let selectedUserId    = null;
-let selectedProjectId = null;
-let currentTasks      = [];   // tasks for the selected project
+let selectedUserId       = null;
+let selectedUserName     = null;
+let selectedProjectId    = null;
+let selectedProjectTitle = null;
+let currentTasks         = [];
+
+/* ── localStorage task cache helpers ───────────────────────────────────── */
+/**
+ * Per-project cache key so switching projects never shows stale data.
+ *   key format:  "tf_tasks_<projectId>"
+ */
+function _taskCacheKey(projectId) {
+  return `tf_tasks_${projectId}`;
+}
+
+/**
+ * Read the cached task array for a project.
+ * Returns an array (possibly empty); never throws — corrupt data yields [].
+ */
+function getTaskCache(projectId) {
+  try {
+    const raw = localStorage.getItem(_taskCacheKey(projectId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+/**
+ * Write the current task array to the cache for a project.
+ * Silently ignores storage errors (e.g. private-browsing quota exceeded).
+ */
+function setTaskCache(projectId, tasks) {
+  try {
+    localStorage.setItem(_taskCacheKey(projectId), JSON.stringify(tasks));
+  } catch (_) {
+    // QuotaExceededError or SecurityError — carry on without caching
+  }
+}
+
+/* ── Mobile navigation state ────────────────────────────────────────────── */
+// Possible values: "users" | "projects" | "tasks" | "detail"
+let mobileViewStack   = ["users"];
+let mobileCurrentTask = null;
+
+function isMobile() {
+  return window.innerWidth < 768;
+}
 
 /* ── DOM refs: header / alert ───────────────────────────────────────────── */
-const headerStatus  = document.getElementById("header-status");
-const alertBanner   = document.getElementById("alert-banner");
-const alertText     = document.getElementById("alert-text");
-const alertClose    = document.getElementById("alert-close");
+const headerStatus       = document.getElementById("header-status");
+const mobileHeaderStatus = document.getElementById("mobile-header-status");
+const alertBanner        = document.getElementById("alert-banner");
+const alertText          = document.getElementById("alert-text");
+const alertClose         = document.getElementById("alert-close");
 
-/* ── DOM refs: breadcrumb ───────────────────────────────────────────────── */
+/* ── DOM refs: mobile header ────────────────────────────────────────────── */
+const mobileBackBtn     = document.getElementById("mobile-back-btn");
+const mobileHeaderTitle = document.getElementById("mobile-header-title");
+const mobileBreadcrumb  = document.getElementById("mobile-breadcrumb");
+
+/* ── DOM refs: desktop breadcrumb ───────────────────────────────────────── */
 const bcUser    = document.getElementById("bc-user");
 const bcProject = document.getElementById("bc-project");
 
 /* ── DOM refs: users panel ──────────────────────────────────────────────── */
-const btnToggleUserForm  = document.getElementById("btn-toggle-user-form");
-const userCreateForm     = document.getElementById("user-create-form");
-const formNewUser        = document.getElementById("form-new-user");
-const uName              = document.getElementById("u-name");
-const uEmail             = document.getElementById("u-email");
-const uNameErr           = document.getElementById("u-name-err");
-const uEmailErr          = document.getElementById("u-email-err");
-const btnCancelUser      = document.getElementById("btn-cancel-user");
-const userListEl         = document.getElementById("user-list");
+const btnToggleUserForm = document.getElementById("btn-toggle-user-form");
+const userCreateForm    = document.getElementById("user-create-form");
+const formNewUser       = document.getElementById("form-new-user");
+const uName             = document.getElementById("u-name");
+const uEmail            = document.getElementById("u-email");
+const uNameErr          = document.getElementById("u-name-err");
+const uEmailErr         = document.getElementById("u-email-err");
+const btnCancelUser     = document.getElementById("btn-cancel-user");
+const userListEl        = document.getElementById("user-list");
 
 /* ── DOM refs: projects panel ───────────────────────────────────────────── */
 const btnToggleProjectForm = document.getElementById("btn-toggle-project-form");
@@ -65,6 +115,7 @@ const btnSearchClear  = document.getElementById("btn-search-clear");
 const filterStatus    = document.getElementById("filter-status");
 const filterPriority  = document.getElementById("filter-priority");
 const sortBy          = document.getElementById("sort-by");
+const taskCountChip   = document.getElementById("task-count");
 
 /* ── DOM refs: project stats ────────────────────────────────────────────── */
 const projectStats = document.getElementById("project-stats");
@@ -79,63 +130,81 @@ const qaDesc       = document.getElementById("qa-desc");
 const qaDescErr    = document.getElementById("qa-desc-err");
 
 /* ── DOM refs: edit modal ───────────────────────────────────────────────── */
-const editModal   = document.getElementById("edit-modal");
-const editForm    = document.getElementById("edit-form");
-const editTaskId  = document.getElementById("edit-task-id");
-const editTitle   = document.getElementById("edit-title");
-const editDesc    = document.getElementById("edit-desc");
-const editPriority = document.getElementById("edit-priority");
-const editStatus  = document.getElementById("edit-status");
-const editDue     = document.getElementById("edit-due");
-const editTitleErr = document.getElementById("edit-title-err");
-const modalCloseX = document.getElementById("modal-close-x");
+const editModal     = document.getElementById("edit-modal");
+const editForm      = document.getElementById("edit-form");
+const editTaskId    = document.getElementById("edit-task-id");
+const editTitle     = document.getElementById("edit-title");
+const editDesc      = document.getElementById("edit-desc");
+const editPriority  = document.getElementById("edit-priority");
+const editStatus    = document.getElementById("edit-status");
+const editDue       = document.getElementById("edit-due");
+const editTitleErr  = document.getElementById("edit-title-err");
+const modalCloseX   = document.getElementById("modal-close-x");
 const editCancelBtn = document.getElementById("edit-cancel-btn");
 
+/* ── DOM refs: mobile task detail ───────────────────────────────────────── */
+const mobileTaskDetail    = document.getElementById("mobile-task-detail");
+const detailTitle         = document.getElementById("detail-title");
+const detailPriorityBadge = document.getElementById("detail-priority-badge");
+const detailDescText      = document.getElementById("detail-desc-text");
+const detailStatusBadge   = document.getElementById("detail-status-badge");
+const detailDue           = document.getElementById("detail-due");
+const detailAssignedUser  = document.getElementById("detail-assigned-user");
+const detailProject       = document.getElementById("detail-project");
+const detailStatusBtns    = document.getElementById("detail-status-buttons");
+const detailTimeline      = document.getElementById("detail-timeline");
+const detailDeleteBtn     = document.getElementById("detail-delete-btn");
+
+/* ── DOM refs: FABs ─────────────────────────────────────────────────────── */
+const fabContainer  = document.getElementById("fab-container");
+const fabAddUser    = document.getElementById("fab-add-user");
+const fabAddProject = document.getElementById("fab-add-project");
+const fabAddTask    = document.getElementById("fab-add-task");
+
+/* ── DOM refs: mobile form overlay ─────────────────────────────────────── */
+const mobileFormOverlay = document.getElementById("mobile-form-overlay");
+const mobileFormInner   = document.getElementById("mobile-form-inner");
+
 /* ==========================================================================
-   Alert banner helpers
+   Alert banner
    ========================================================================== */
 function showAlert(message, isError = false) {
   alertText.textContent = message;
   alertBanner.classList.toggle("alert-error", isError);
-  alertBanner.classList.toggle("alert-info", !isError);
+  alertBanner.classList.toggle("alert-info",  !isError);
   alertBanner.hidden = false;
-  alertClose.hidden = false;   // show the ✕ only when there is an active alert
+  alertClose.hidden  = false;
 }
 
 function hideAlert() {
   alertBanner.hidden = true;
-  alertClose.hidden = true;    // hide the ✕ once the banner is gone
+  alertClose.hidden  = true;
   alertText.textContent = "";
 }
 
 alertClose.addEventListener("click", hideAlert);
 
 /* ==========================================================================
-   Toast notifications (auto-dismiss after 3 s)
+   Toast notifications
    ========================================================================== */
 const toastStack = document.getElementById("toast-stack");
 
-/**
- * Show a brief toast notification.
- * @param {string} message
- * @param {"success"|"error"|"info"} type
- */
 function toast(message, type = "success") {
   const el = document.createElement("div");
   el.className = `toast toast-${type}`;
   el.setAttribute("role", "status");
 
-  const icon = { success: "✔", error: "✖", info: "ℹ" }[type] ?? "ℹ";
+  const icon   = { success: "✔", error: "✖", info: "ℹ" }[type] ?? "ℹ";
   const iconEl = document.createElement("span");
-  iconEl.className = "toast-icon";
+  iconEl.className   = "toast-icon";
   iconEl.textContent = icon;
 
   const textEl = document.createElement("span");
-  textEl.className = "toast-text";
+  textEl.className   = "toast-text";
   textEl.textContent = message;
 
   const closeEl = document.createElement("button");
-  closeEl.className = "toast-close";
+  closeEl.className   = "toast-close";
   closeEl.textContent = "✕";
   closeEl.setAttribute("aria-label", "Dismiss");
   closeEl.addEventListener("click", () => dismiss(el));
@@ -145,10 +214,7 @@ function toast(message, type = "success") {
   el.appendChild(closeEl);
   toastStack.appendChild(el);
 
-  // Trigger slide-in
   requestAnimationFrame(() => el.classList.add("toast-visible"));
-
-  // Auto-dismiss after 3 s
   const timer = setTimeout(() => dismiss(el), 3000);
   el._dismissTimer = timer;
 
@@ -161,7 +227,7 @@ function toast(message, type = "success") {
 }
 
 /* ==========================================================================
-   Backend API layer — fetch wrappers
+   API layer
    ========================================================================== */
 async function apiFetch(path, options = {}) {
   const res = await fetch(API_BASE + path, {
@@ -170,38 +236,31 @@ async function apiFetch(path, options = {}) {
   });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
-    try {
-      const body = await res.json();
-      detail = body.detail ?? JSON.stringify(body);
-    } catch (_) {}
+    try { const b = await res.json(); detail = b.detail ?? JSON.stringify(b); } catch (_) {}
     throw new Error(detail);
   }
   if (res.status === 204) return null;
   return res.json();
 }
 
-// ── Users ──────────────────────────────────────────────────────────────────
-const apiListUsers   = ()       => apiFetch("/users/");
-const apiCreateUser  = (data)   => apiFetch("/users/", { method: "POST", body: JSON.stringify(data) });
-const apiDeleteUser  = (id)     => apiFetch(`/users/${id}`, { method: "DELETE" });
+const apiListUsers     = ()      => apiFetch("/users/");
+const apiCreateUser    = (d)     => apiFetch("/users/",  { method: "POST", body: JSON.stringify(d) });
+const apiDeleteUser    = (id)    => apiFetch(`/users/${id}`, { method: "DELETE" });
 
-// ── Projects ───────────────────────────────────────────────────────────────
-const apiListProjects   = ()       => apiFetch("/projects/");
-const apiCreateProject  = (data)   => apiFetch("/projects/", { method: "POST", body: JSON.stringify(data) });
-const apiUpdateProject  = (id, d)  => apiFetch(`/projects/${id}`, { method: "PUT", body: JSON.stringify(d) });
-const apiDeleteProject  = (id)     => apiFetch(`/projects/${id}`, { method: "DELETE" });
+const apiListProjects  = ()      => apiFetch("/projects/");
+const apiCreateProject = (d)     => apiFetch("/projects/", { method: "POST", body: JSON.stringify(d) });
+const apiUpdateProject = (id, d) => apiFetch(`/projects/${id}`, { method: "PUT",  body: JSON.stringify(d) });
+const apiDeleteProject = (id)    => apiFetch(`/projects/${id}`, { method: "DELETE" });
 
-// ── Tasks ──────────────────────────────────────────────────────────────────
-const apiListTasks   = (projectId, sort) =>
-  apiFetch(`/tasks/?project_id=${projectId}${sort ? "&sort=" + sort : ""}`);
-const apiSearchTask  = (title, algo) =>
+const apiListTasks  = (pid, sort) =>
+  apiFetch(`/tasks/?project_id=${pid}${sort ? "&sort=" + sort : ""}`);
+const apiSearchTask = (title, algo) =>
   apiFetch(`/tasks/search?title=${encodeURIComponent(title)}&algo=${algo}`);
-const apiCreateTask  = (data)  => apiFetch("/tasks/", { method: "POST", body: JSON.stringify(data) });
-const apiUpdateTask  = (id, d) => apiFetch(`/tasks/${id}`, { method: "PUT", body: JSON.stringify(d) });
-const apiDeleteTask  = (id)    => apiFetch(`/tasks/${id}`, { method: "DELETE" });
-const apiQuickAdd    = (data)  => apiFetch("/tasks/quick-add", { method: "POST", body: JSON.stringify(data) });
-const apiProjectStats = (id)   => apiFetch(`/stats/projects/${id}`);
-
+const apiCreateTask = (d)     => apiFetch("/tasks/",  { method: "POST", body: JSON.stringify(d) });
+const apiUpdateTask = (id, d) => apiFetch(`/tasks/${id}`, { method: "PUT",  body: JSON.stringify(d) });
+const apiDeleteTask = (id)    => apiFetch(`/tasks/${id}`, { method: "DELETE" });
+const apiQuickAdd   = (d)     => apiFetch("/tasks/quick-add", { method: "POST", body: JSON.stringify(d) });
+const apiProjectStats = (id)  => apiFetch(`/stats/projects/${id}`);
 
 /* ==========================================================================
    Validation helpers
@@ -226,66 +285,348 @@ function clearFieldError(input, errEl) {
   });
 }
 
-clearFieldError(uName,  uNameErr);
-clearFieldError(uEmail, uEmailErr);
-clearFieldError(pTitle, pTitleErr);
-clearFieldError(tTitle, tTitleErr);
+clearFieldError(uName,     uNameErr);
+clearFieldError(uEmail,    uEmailErr);
+clearFieldError(pTitle,    pTitleErr);
+clearFieldError(tTitle,    tTitleErr);
 clearFieldError(editTitle, editTitleErr);
 
+function statusLabel(s) {
+  return { todo: "To Do", in_progress: "In Progress", done: "Done" }[s] ?? s;
+}
+
+
 /* ==========================================================================
-   Breadcrumb updater
+   MOBILE NAVIGATION ENGINE
+   ========================================================================== */
+
+/**
+ * Map screen names to their DOM elements.
+ * The detail screen sits outside .workspace but is handled the same way.
+ */
+const SCREENS = {
+  users:    document.getElementById("panel-users"),
+  projects: document.getElementById("panel-projects"),
+  tasks:    document.getElementById("panel-tasks"),
+  detail:   document.getElementById("mobile-task-detail"),
+};
+
+/**
+ * Push a new screen onto the view stack and animate it in (slide from right).
+ */
+function pushView(screenName) {
+  if (!isMobile()) return;
+
+  const prev = mobileViewStack[mobileViewStack.length - 1];
+  mobileViewStack.push(screenName);
+
+  _applyScreenVisibility();
+  _animateTransition(prev, screenName, "forward");
+  updateMobileHeader();
+  updateFABs();
+}
+
+/**
+ * Pop the current screen and animate back (slide to right).
+ */
+function popView() {
+  if (!isMobile() || mobileViewStack.length <= 1) return;
+
+  const current = mobileViewStack.pop();
+  const prev    = mobileViewStack[mobileViewStack.length - 1];
+
+  _applyScreenVisibility();
+  _animateTransition(current, prev, "back");
+  updateMobileHeader();
+  updateFABs();
+}
+
+/**
+ * Set which screen element should be "active" (visible) based on the stack top.
+ * All others get pointer-events removed so they can't intercept touches.
+ */
+function _applyScreenVisibility() {
+  const active = mobileViewStack[mobileViewStack.length - 1];
+  Object.entries(SCREENS).forEach(([name, el]) => {
+    if (!el) return;
+    if (name === active) {
+      el.classList.add("mobile-active");
+      el.hidden = false;
+    } else {
+      el.classList.remove("mobile-active");
+      // Keep hidden=false so CSS transitions can still run; hide after animation
+    }
+  });
+}
+
+/**
+ * Run CSS slide animations between two screens.
+ * forward: fromEl exits left, toEl enters from right.
+ * back:    fromEl exits right, toEl enters from left.
+ */
+function _animateTransition(fromName, toName, direction) {
+  const fromEl = SCREENS[fromName];
+  const toEl   = SCREENS[toName];
+  if (!fromEl || !toEl) return;
+
+  // Strip any leftover animation classes first
+  const allAnim = [
+    "mobile-screen-enter", "mobile-screen-exit",
+    "mobile-screen-enter-back", "mobile-screen-exit-back",
+  ];
+  [fromEl, toEl].forEach(el => el.classList.remove(...allAnim));
+
+  if (direction === "forward") {
+    fromEl.classList.add("mobile-screen-exit");
+    toEl.classList.add("mobile-screen-enter");
+  } else {
+    fromEl.classList.add("mobile-screen-exit-back");
+    toEl.classList.add("mobile-screen-enter-back");
+  }
+
+  // Clean up after animation
+  const cleanup = () => {
+    [fromEl, toEl].forEach(el => el.classList.remove(...allAnim));
+    // Hide the screen that exited (keep the one we entered visible)
+    fromEl.hidden = (fromName === "detail");
+  };
+  toEl.addEventListener("animationend", cleanup, { once: true });
+}
+
+/**
+ * Update mobile header: title text, breadcrumb trail, back-button visibility.
+ */
+function updateMobileHeader() {
+  if (!isMobile()) return;
+
+  const screen = mobileViewStack[mobileViewStack.length - 1];
+  const depth  = mobileViewStack.length;
+
+  // Back button — shown whenever we are not at root
+  mobileBackBtn.hidden = depth <= 1;
+
+  // Title — replace text node after the icon span
+  const titles = {
+    users:   "TaskFlow",
+    projects: selectedUserName     ?? "Projects",
+    tasks:    selectedProjectTitle ?? "Tasks",
+    detail:   mobileCurrentTask?.title ?? "Task Detail",
+  };
+  // Remove existing text nodes
+  Array.from(mobileHeaderTitle.childNodes)
+    .filter(n => n.nodeType === Node.TEXT_NODE)
+    .forEach(n => n.remove());
+  mobileHeaderTitle.appendChild(
+    document.createTextNode(" " + (titles[screen] ?? "TaskFlow"))
+  );
+
+  // Breadcrumb
+  _renderMobileBreadcrumb(screen);
+}
+
+function _renderMobileBreadcrumb(screen) {
+  mobileBreadcrumb.innerHTML = "";
+
+  const crumbs = ["Workspace"];
+  if (["projects", "tasks", "detail"].includes(screen))
+    crumbs.push(selectedUserName ?? "User");
+  if (["tasks", "detail"].includes(screen))
+    crumbs.push(selectedProjectTitle ?? "Project");
+  if (screen === "detail" && mobileCurrentTask) {
+    const t = mobileCurrentTask.title;
+    crumbs.push(t.length > 18 ? t.slice(0, 16) + "…" : t);
+  }
+
+  crumbs.forEach((text, i) => {
+    const span = document.createElement("span");
+    span.className   = "mbc-item";
+    span.textContent = text;
+    mobileBreadcrumb.appendChild(span);
+
+    if (i < crumbs.length - 1) {
+      const sep = document.createElement("span");
+      sep.className   = "mbc-sep";
+      sep.textContent = "›";
+      sep.setAttribute("aria-hidden", "true");
+      mobileBreadcrumb.appendChild(sep);
+    }
+  });
+}
+
+/**
+ * Show only the FAB relevant to the current mobile screen.
+ */
+function updateFABs() {
+  if (!isMobile()) {
+    fabContainer.setAttribute("aria-hidden", "true");
+    fabAddUser.hidden = fabAddProject.hidden = fabAddTask.hidden = true;
+    return;
+  }
+
+  fabContainer.removeAttribute("aria-hidden");
+  const screen = mobileViewStack[mobileViewStack.length - 1];
+  fabAddUser.hidden    = screen !== "users";
+  fabAddProject.hidden = screen !== "projects";
+  fabAddTask.hidden    = screen !== "tasks";
+}
+
+/**
+ * Switch layout mode between mobile (absolute panels) and desktop (grid).
+ */
+function applyMobileLayout() {
+  const workspace   = document.getElementById("workspace");
+  const siteHeader  = document.querySelector(".site-header");
+  const desktopBc   = document.querySelector(".breadcrumb.desktop-only");
+
+  if (isMobile()) {
+    workspace.classList.add("mobile-nav-active");
+    siteHeader?.classList.add("desktop-header-hidden");
+    desktopBc?.classList.add("desktop-header-hidden");
+
+    // Make sure only the current screen is active
+    _applyScreenVisibility();
+    // Detail screen starts hidden
+    if (!mobileViewStack.includes("detail")) {
+      mobileTaskDetail.hidden = true;
+      mobileTaskDetail.classList.remove("mobile-active");
+    }
+    updateMobileHeader();
+    updateFABs();
+  } else {
+    workspace.classList.remove("mobile-nav-active");
+    siteHeader?.classList.remove("desktop-header-hidden");
+    desktopBc?.classList.remove("desktop-header-hidden");
+
+    // Restore all panels to normal (grid layout handles visibility)
+    Object.values(SCREENS).forEach(el => {
+      if (!el) return;
+      el.classList.remove(
+        "mobile-active", "mobile-screen-enter", "mobile-screen-exit",
+        "mobile-screen-enter-back", "mobile-screen-exit-back"
+      );
+    });
+    mobileTaskDetail.hidden = true;
+    fabContainer.setAttribute("aria-hidden", "true");
+    fabAddUser.hidden = fabAddProject.hidden = fabAddTask.hidden = true;
+  }
+}
+
+// Re-evaluate layout whenever viewport width crosses the 768px boundary
+let _lastMobile = isMobile();
+window.addEventListener("resize", () => {
+  const nowMobile = isMobile();
+  if (nowMobile !== _lastMobile) {
+    _lastMobile = nowMobile;
+    if (!nowMobile) mobileViewStack = ["users"];
+    applyMobileLayout();
+  }
+});
+
+/* Back button — closes overlay if open, otherwise pops the view stack */
+mobileBackBtn.addEventListener("click", () => {
+  if (!mobileFormOverlay.hidden) {
+    closeMobileFormOverlay();
+    return;
+  }
+  popView();
+});
+
+/* ==========================================================================
+   MOBILE FORM OVERLAY (bottom sheet)
+   ========================================================================== */
+function openMobileFormOverlay(contentNode) {
+  mobileFormInner.innerHTML = "";
+  mobileFormInner.appendChild(contentNode);
+  mobileFormOverlay.hidden = false;
+  requestAnimationFrame(() =>
+    mobileFormOverlay.classList.add("mobile-form-overlay-open")
+  );
+  mobileFormInner.querySelector("input, textarea, select, button")?.focus();
+}
+
+function closeMobileFormOverlay() {
+  mobileFormOverlay.classList.remove("mobile-form-overlay-open");
+  mobileFormOverlay.addEventListener("transitionend", () => {
+    mobileFormOverlay.hidden = true;
+    mobileFormInner.innerHTML = "";
+  }, { once: true });
+}
+
+// Tap backdrop to close
+mobileFormOverlay.addEventListener("click", (e) => {
+  if (e.target === mobileFormOverlay) closeMobileFormOverlay();
+});
+
+/* ==========================================================================
+   Desktop breadcrumb updater
    ========================================================================== */
 function updateBreadcrumb(userName, projectTitle) {
-  bcUser.textContent    = userName    ?? bcUser.dataset.empty;
+  bcUser.textContent    = userName     ?? bcUser.dataset.empty;
   bcProject.textContent = projectTitle ?? bcProject.dataset.empty;
 }
+
 
 /* ==========================================================================
    PANEL 1 — USERS
    ========================================================================== */
 
-/** Render the list of users into #user-list */
 function renderUsers(users) {
   userListEl.innerHTML = "";
   if (!users.length) {
     const li = document.createElement("li");
-    li.className = "entity-empty";
-    li.textContent = "No users yet. Click + to create one.";
+    li.className   = "entity-empty";
+    li.textContent = "No users yet. Tap + to create one.";
     userListEl.appendChild(li);
     return;
   }
-  users.forEach(user => userListEl.appendChild(buildUserCard(user)));
+  users.forEach(u => userListEl.appendChild(buildUserCard(u)));
 }
 
 function buildUserCard(user) {
   const li = document.createElement("li");
-  li.className = "entity-card";
+  li.className  = "entity-card";
   li.dataset.id = user.id;
   if (user.id === selectedUserId) li.classList.add("is-selected");
 
-  const info = document.createElement("div");
+  // Avatar
+  const avatar = document.createElement("div");
+  avatar.className   = "card-avatar";
+  avatar.textContent = user.name.charAt(0).toUpperCase();
+  avatar.setAttribute("aria-hidden", "true");
+
+  const info  = document.createElement("div");
   info.className = "card-info";
 
-  const name = document.createElement("span");
-  name.className = "card-title";
+  const name  = document.createElement("span");
+  name.className   = "card-title";
   name.textContent = user.name;
 
   const email = document.createElement("span");
-  email.className = "card-sub";
+  email.className   = "card-sub";
   email.textContent = user.email;
 
   info.appendChild(name);
   info.appendChild(email);
 
   const del = document.createElement("button");
-  del.type = "button";
+  del.type      = "button";
   del.className = "btn btn-danger btn-sm card-del";
   del.textContent = "✕";
   del.setAttribute("aria-label", `Delete user ${user.name}`);
   del.addEventListener("click", (e) => { e.stopPropagation(); handleDeleteUser(user.id); });
 
+  const chevron = document.createElement("span");
+  chevron.className = "card-chevron";
+  chevron.setAttribute("aria-hidden", "true");
+  chevron.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+    viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="9 18 15 12 9 6"></polyline></svg>`;
+
+  li.appendChild(avatar);
   li.appendChild(info);
   li.appendChild(del);
+  li.appendChild(chevron);
   li.addEventListener("click", () => selectUser(user));
   return li;
 }
@@ -300,11 +641,12 @@ async function loadUsers() {
 }
 
 async function selectUser(user) {
-  selectedUserId    = user.id;
-  selectedProjectId = null;
-  currentTasks      = [];
+  selectedUserId       = user.id;
+  selectedUserName     = user.name;
+  selectedProjectId    = null;
+  selectedProjectTitle = null;
+  currentTasks         = [];
 
-  // Update highlight
   document.querySelectorAll("#user-list .entity-card").forEach(el =>
     el.classList.toggle("is-selected", Number(el.dataset.id) === user.id)
   );
@@ -312,13 +654,13 @@ async function selectUser(user) {
   updateBreadcrumb(user.name, null);
   btnToggleProjectForm.disabled = false;
 
-  // Clear tasks panel
   renderTasksEmpty("Select a project to see tasks.");
   projectStats.hidden = true;
   btnToggleTaskForm.disabled = true;
   if (!taskCreateForm.hidden) togglePanel(taskCreateForm, btnToggleTaskForm);
 
   await loadProjectsForUser(user.id);
+  if (isMobile()) pushView("projects");
 }
 
 async function handleDeleteUser(id) {
@@ -326,15 +668,21 @@ async function handleDeleteUser(id) {
   try {
     await apiDeleteUser(id);
     if (selectedUserId === id) {
-      selectedUserId = null;
-      selectedProjectId = null;
-      currentTasks = [];
+      selectedUserId = selectedUserName = selectedProjectId = selectedProjectTitle = null;
+      currentTasks   = [];
       updateBreadcrumb(null, null);
-      btnToggleProjectForm.disabled = true;
-      btnToggleTaskForm.disabled = true;
+      btnToggleProjectForm.disabled = btnToggleTaskForm.disabled = true;
       renderProjectsEmpty("Select a user to see projects.");
       renderTasksEmpty("Select a project to see tasks.");
       projectStats.hidden = true;
+      if (isMobile()) {
+        mobileViewStack = ["users"];
+        mobileTaskDetail.hidden = true;
+        mobileTaskDetail.classList.remove("mobile-active");
+        _applyScreenVisibility();
+        updateMobileHeader();
+        updateFABs();
+      }
     }
     await loadUsers();
     toast("User deleted.", "info");
@@ -343,27 +691,23 @@ async function handleDeleteUser(id) {
   }
 }
 
-/* Toggle collapsible form panels */
+/* Toggle collapsible form panels (desktop only) */
 function togglePanel(formEl, btnEl) {
   const nowHidden = !formEl.hidden;
-  formEl.hidden = nowHidden;
+  formEl.hidden   = nowHidden;
   btnEl.setAttribute("aria-expanded", String(!nowHidden));
 }
 
-btnToggleUserForm.addEventListener("click", () => {
-  togglePanel(userCreateForm, btnToggleUserForm);
-});
+btnToggleUserForm.addEventListener("click", () => togglePanel(userCreateForm, btnToggleUserForm));
+
 btnCancelUser.addEventListener("click", () => {
   formNewUser.reset();
-  uNameErr.textContent = "";
-  uEmailErr.textContent = "";
+  uNameErr.textContent = uEmailErr.textContent = "";
   togglePanel(userCreateForm, btnToggleUserForm);
 });
-// Close-X button at the top of the user form
 document.getElementById("btn-close-user-form").addEventListener("click", () => {
   formNewUser.reset();
-  uNameErr.textContent = "";
-  uEmailErr.textContent = "";
+  uNameErr.textContent = uEmailErr.textContent = "";
   togglePanel(userCreateForm, btnToggleUserForm);
 });
 
@@ -372,16 +716,63 @@ formNewUser.addEventListener("submit", async (e) => {
   const okName  = validateField(uName,  uNameErr,  "Name is required.");
   const okEmail = validateField(uEmail, uEmailErr, "Email is required.");
   if (!okName || !okEmail) return;
-
   try {
     await apiCreateUser({ name: uName.value.trim(), email: uEmail.value.trim() });
     formNewUser.reset();
-    togglePanel(userCreateForm, btnToggleUserForm);
+    if (isMobile()) closeMobileFormOverlay();
+    else            togglePanel(userCreateForm, btnToggleUserForm);
     await loadUsers();
     toast("✦ User created successfully!", "success");
   } catch (err) {
     showAlert("Could not create user: " + err.message, true);
   }
+});
+
+/* FAB — Add User (mobile) */
+fabAddUser.addEventListener("click", () => {
+  const frag = document.createDocumentFragment();
+  const h3   = document.createElement("h3");
+  h3.textContent = "New User";
+  frag.appendChild(h3);
+
+  // Clone the form so it can appear in the overlay
+  const clonedForm = formNewUser.cloneNode(true);
+  clonedForm.id = "mobile-form-new-user";
+
+  // Wire up the cloned form inputs
+  const mName  = clonedForm.querySelector("#u-name");
+  const mEmail = clonedForm.querySelector("#u-email");
+  const mNameErr  = clonedForm.querySelector("#u-name-err");
+  const mEmailErr = clonedForm.querySelector("#u-email-err");
+
+  // Give cloned elements unique ids to avoid duplicate-id issues
+  mName.id  = "m-u-name";  mName.setAttribute("aria-describedby",  "m-u-name-err");
+  mEmail.id = "m-u-email"; mEmail.setAttribute("aria-describedby", "m-u-email-err");
+  mNameErr.id  = "m-u-name-err";
+  mEmailErr.id = "m-u-email-err";
+
+  clonedForm.querySelector("[type=submit]").textContent = "Create User";
+  clonedForm.querySelector("#btn-cancel-user")?.remove();
+
+  clonedForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const okN = validateField(mName,  mNameErr,  "Name is required.");
+    const okE = validateField(mEmail, mEmailErr, "Email is required.");
+    if (!okN || !okE) return;
+    try {
+      await apiCreateUser({ name: mName.value.trim(), email: mEmail.value.trim() });
+      closeMobileFormOverlay();
+      await loadUsers();
+      toast("✦ User created!", "success");
+    } catch (err) {
+      showAlert("Could not create user: " + err.message, true);
+    }
+  });
+
+  frag.appendChild(clonedForm);
+  const wrapper = document.createElement("div");
+  wrapper.appendChild(frag);
+  openMobileFormOverlay(wrapper);
 });
 
 
@@ -392,7 +783,7 @@ formNewUser.addEventListener("submit", async (e) => {
 function renderProjectsEmpty(msg) {
   projectListEl.innerHTML = "";
   const li = document.createElement("li");
-  li.className = "entity-empty";
+  li.className   = "entity-empty";
   li.textContent = msg;
   projectListEl.appendChild(li);
 }
@@ -400,7 +791,7 @@ function renderProjectsEmpty(msg) {
 function renderProjects(projects) {
   projectListEl.innerHTML = "";
   if (!projects.length) {
-    renderProjectsEmpty("No projects yet. Click + to create one.");
+    renderProjectsEmpty("No projects yet. Tap + to create one.");
     return;
   }
   projects.forEach(p => projectListEl.appendChild(buildProjectCard(p)));
@@ -408,22 +799,21 @@ function renderProjects(projects) {
 
 function buildProjectCard(project) {
   const li = document.createElement("li");
-  li.className = "entity-card";
+  li.className  = "entity-card";
   li.dataset.id = project.id;
   if (project.id === selectedProjectId) li.classList.add("is-selected");
 
-  const info = document.createElement("div");
+  const info  = document.createElement("div");
   info.className = "card-info";
 
-  const title = document.createElement("span");
-  title.className = "card-title";
-  title.textContent = project.title;
-
-  info.appendChild(title);
+  const titleEl = document.createElement("span");
+  titleEl.className   = "card-title";
+  titleEl.textContent = project.title;
+  info.appendChild(titleEl);
 
   if (project.description) {
     const desc = document.createElement("span");
-    desc.className = "card-sub";
+    desc.className   = "card-sub";
     desc.textContent = project.description;
     info.appendChild(desc);
   }
@@ -432,14 +822,17 @@ function buildProjectCard(project) {
   actions.className = "card-actions";
 
   const editBtn = document.createElement("button");
-  editBtn.type = "button";
+  editBtn.type      = "button";
   editBtn.className = "btn btn-secondary btn-sm card-edit";
   editBtn.textContent = "✎";
   editBtn.setAttribute("aria-label", `Edit project ${project.title}`);
-  editBtn.addEventListener("click", (e) => { e.stopPropagation(); openProjectEditInline(project, li, title); });
+  editBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openProjectEditInline(project, li, titleEl);
+  });
 
   const del = document.createElement("button");
-  del.type = "button";
+  del.type      = "button";
   del.className = "btn btn-danger btn-sm card-del";
   del.textContent = "✕";
   del.setAttribute("aria-label", `Delete project ${project.title}`);
@@ -447,30 +840,38 @@ function buildProjectCard(project) {
 
   actions.appendChild(editBtn);
   actions.appendChild(del);
+
+  const chevron = document.createElement("span");
+  chevron.className = "card-chevron";
+  chevron.setAttribute("aria-hidden", "true");
+  chevron.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+    viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="9 18 15 12 9 6"></polyline></svg>`;
+
   li.appendChild(info);
   li.appendChild(actions);
+  li.appendChild(chevron);
   li.addEventListener("click", () => selectProject(project));
   return li;
 }
 
-/** Inline edit: replace the title span with an input box */
 function openProjectEditInline(project, li, titleEl) {
   const input = document.createElement("input");
-  input.type = "text";
+  input.type      = "text";
   input.className = "inline-edit-input";
-  input.value = project.title;
+  input.value     = project.title;
 
-  const save = document.createElement("button");
-  save.type = "button";
+  const save   = document.createElement("button");
+  save.type      = "button";
   save.className = "btn btn-primary btn-sm";
   save.textContent = "Save";
 
   const cancel = document.createElement("button");
-  cancel.type = "button";
+  cancel.type      = "button";
   cancel.className = "btn btn-secondary btn-sm";
   cancel.textContent = "Cancel";
 
-  // Buttons sit in their own row so the input gets full width
   const btnRow = document.createElement("div");
   btnRow.className = "inline-edit-buttons";
   btnRow.appendChild(save);
@@ -483,20 +884,22 @@ function openProjectEditInline(project, li, titleEl) {
 
   titleEl.replaceWith(row);
   input.focus();
-  // Select all text so the user can start typing immediately
   input.select();
 
   cancel.addEventListener("click", () => row.replaceWith(titleEl));
+
   save.addEventListener("click", async () => {
     const val = input.value.trim();
     if (!val) { input.setAttribute("aria-invalid", "true"); return; }
     try {
       const updated = await apiUpdateProject(project.id, { title: val });
-      project.title = updated.title;
+      project.title    = updated.title;
       titleEl.textContent = updated.title;
       row.replaceWith(titleEl);
       if (selectedProjectId === project.id) {
         bcProject.textContent = updated.title;
+        selectedProjectTitle  = updated.title;
+        if (isMobile()) updateMobileHeader();
       }
       toast("Project updated.", "success");
     } catch (err) {
@@ -504,7 +907,6 @@ function openProjectEditInline(project, li, titleEl) {
     }
   });
 
-  // Also save on Enter key
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter")  { e.preventDefault(); save.click(); }
     if (e.key === "Escape") { cancel.click(); }
@@ -513,9 +915,8 @@ function openProjectEditInline(project, li, titleEl) {
 
 async function loadProjectsForUser(userId) {
   try {
-    // Use the ORM relationship endpoint: GET /users/{id}/projects
-    const userWithProjects = await apiFetch(`/users/${userId}/projects`);
-    renderProjects(userWithProjects.projects);
+    const data = await apiFetch(`/users/${userId}/projects`);
+    renderProjects(data.projects);
   } catch (err) {
     showAlert("Could not load projects: " + err.message, true);
     renderProjectsEmpty("Failed to load projects.");
@@ -523,17 +924,20 @@ async function loadProjectsForUser(userId) {
 }
 
 async function selectProject(project) {
-  selectedProjectId = project.id;
+  selectedProjectId    = project.id;
+  selectedProjectTitle = project.title;
 
   document.querySelectorAll("#project-list .entity-card").forEach(el =>
     el.classList.toggle("is-selected", Number(el.dataset.id) === project.id)
   );
 
-  bcProject.textContent = project.title;
+  bcProject.textContent      = project.title;
   btnToggleTaskForm.disabled = false;
 
   await loadTasksForProject(project.id);
   await loadProjectStats(project.id);
+
+  if (isMobile()) pushView("tasks");
 }
 
 async function handleDeleteProject(id) {
@@ -541,12 +945,22 @@ async function handleDeleteProject(id) {
   try {
     await apiDeleteProject(id);
     if (selectedProjectId === id) {
-      selectedProjectId = null;
+      selectedProjectId = selectedProjectTitle = null;
       currentTasks = [];
-      bcProject.textContent = bcProject.dataset.empty;
+      bcProject.textContent      = bcProject.dataset.empty;
       btnToggleTaskForm.disabled = true;
       renderTasksEmpty("Select a project to see tasks.");
       projectStats.hidden = true;
+      if (isMobile()) {
+        // Pop back to projects screen if tasks or detail is open
+        while (mobileViewStack.length > 1 &&
+               ["tasks","detail"].includes(mobileViewStack[mobileViewStack.length - 1])) {
+          mobileViewStack.pop();
+        }
+        _applyScreenVisibility();
+        updateMobileHeader();
+        updateFABs();
+      }
     }
     if (selectedUserId) await loadProjectsForUser(selectedUserId);
     toast("Project deleted.", "info");
@@ -555,25 +969,20 @@ async function handleDeleteProject(id) {
   }
 }
 
-btnToggleProjectForm.addEventListener("click", () => {
-  togglePanel(projectCreateForm, btnToggleProjectForm);
-});
+btnToggleProjectForm.addEventListener("click", () => togglePanel(projectCreateForm, btnToggleProjectForm));
+
 btnCancelProject.addEventListener("click", () => {
-  formNewProject.reset();
-  pTitleErr.textContent = "";
+  formNewProject.reset(); pTitleErr.textContent = "";
   togglePanel(projectCreateForm, btnToggleProjectForm);
 });
-// Close-X button at the top of the project form
 document.getElementById("btn-close-project-form").addEventListener("click", () => {
-  formNewProject.reset();
-  pTitleErr.textContent = "";
+  formNewProject.reset(); pTitleErr.textContent = "";
   togglePanel(projectCreateForm, btnToggleProjectForm);
 });
 
 formNewProject.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!validateField(pTitle, pTitleErr, "Title is required.")) return;
-
   try {
     await apiCreateProject({
       title:       pTitle.value.trim(),
@@ -581,7 +990,8 @@ formNewProject.addEventListener("submit", async (e) => {
       owner_id:    selectedUserId,
     });
     formNewProject.reset();
-    togglePanel(projectCreateForm, btnToggleProjectForm);
+    if (isMobile()) closeMobileFormOverlay();
+    else            togglePanel(projectCreateForm, btnToggleProjectForm);
     await loadProjectsForUser(selectedUserId);
     toast("✦ Project created successfully!", "success");
   } catch (err) {
@@ -589,19 +999,63 @@ formNewProject.addEventListener("submit", async (e) => {
   }
 });
 
+/* FAB — Add Project (mobile) */
+fabAddProject.addEventListener("click", () => {
+  const wrapper = document.createElement("div");
+  const h3 = document.createElement("h3");
+  h3.textContent = "New Project";
+  wrapper.appendChild(h3);
+
+  const form = document.createElement("form");
+  form.noValidate = true;
+  form.innerHTML = `
+    <div class="field-group">
+      <label for="mob-p-title">Title *</label>
+      <input type="text" id="mob-p-title" placeholder="Project title"
+             autocomplete="off" aria-required="true" />
+      <span class="field-error" id="mob-p-title-err" role="alert"></span>
+    </div>
+    <div class="field-group">
+      <label for="mob-p-desc">Description</label>
+      <textarea id="mob-p-desc" rows="2" placeholder="Optional description"></textarea>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Create Project</button>
+    </div>`;
+
+  const mPTitle = form.querySelector("#mob-p-title");
+  const mPTitleErr = form.querySelector("#mob-p-title-err");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!validateField(mPTitle, mPTitleErr, "Title is required.")) return;
+    try {
+      await apiCreateProject({
+        title:       mPTitle.value.trim(),
+        description: form.querySelector("#mob-p-desc").value.trim() || null,
+        owner_id:    selectedUserId,
+      });
+      closeMobileFormOverlay();
+      await loadProjectsForUser(selectedUserId);
+      toast("✦ Project created!", "success");
+    } catch (err) {
+      showAlert("Could not create project: " + err.message, true);
+    }
+  });
+
+  wrapper.appendChild(form);
+  openMobileFormOverlay(wrapper);
+});
+
 
 /* ==========================================================================
    PANEL 3 — TASKS
    ========================================================================== */
 
-function statusLabel(s) {
-  return { todo: "To Do", in_progress: "In Progress", done: "Done" }[s] ?? s;
-}
-
 function renderTasksEmpty(msg) {
   taskListEl.innerHTML = "";
   const li = document.createElement("li");
-  li.className = "entity-empty";
+  li.className   = "entity-empty";
   li.textContent = msg;
   taskListEl.appendChild(li);
 }
@@ -616,9 +1070,19 @@ function renderTasks(tasks) {
     return okS && okP;
   });
 
+  const total = currentTasks.length;
+  const shown = visible.length;
+  if (taskCountChip) {
+    taskCountChip.textContent =
+      total === 0 ? "" :
+      shown === total ? `${total} task${total !== 1 ? "s" : ""}` :
+      `${shown} / ${total} tasks`;
+    taskCountChip.hidden = total === 0;
+  }
+
   taskListEl.innerHTML = "";
   if (!visible.length) {
-    renderTasksEmpty("No tasks match the current filters.");
+    renderTasksEmpty(total === 0 ? "No tasks yet." : "No tasks match the current filters.");
     return;
   }
   visible.forEach(t => taskListEl.appendChild(buildTaskCard(t)));
@@ -626,22 +1090,43 @@ function renderTasks(tasks) {
 
 function buildTaskCard(task) {
   const li = document.createElement("li");
-  li.className = "task-item";
+  li.className        = "task-item";
   li.dataset.id       = task.id;
   li.dataset.priority = task.priority;
   li.dataset.status   = task.status;
+
+  // Checkbox
+  const checkbox = document.createElement("input");
+  checkbox.type      = "checkbox";
+  checkbox.className = "task-checkbox";
+  checkbox.checked   = task.status === "done";
+  checkbox.setAttribute("aria-label", `Mark "${task.title}" as done`);
+  checkbox.addEventListener("change", async (e) => {
+    e.stopPropagation();
+    const newStatus = checkbox.checked ? "done" : "todo";
+    try {
+      const updated = await apiUpdateTask(task.id, { ...task, status: newStatus });
+      currentTasks = currentTasks.map(t => (t.id === task.id ? updated : t));
+      setTaskCache(selectedProjectId, currentTasks);   // ← cache after update
+      renderTasks(currentTasks);
+      await loadProjectStats(selectedProjectId);
+    } catch (err) {
+      showAlert("Could not update task: " + err.message, true);
+      checkbox.checked = !checkbox.checked;
+    }
+  });
 
   const body = document.createElement("div");
   body.className = "task-body";
 
   const titleEl = document.createElement("p");
-  titleEl.className = "task-title";
+  titleEl.className   = "task-title";
   titleEl.textContent = task.title;
   body.appendChild(titleEl);
 
   if (task.description) {
     const descEl = document.createElement("p");
-    descEl.className = "task-desc";
+    descEl.className   = "task-desc";
     descEl.textContent = task.description;
     body.appendChild(descEl);
   }
@@ -650,70 +1135,99 @@ function buildTaskCard(task) {
   meta.className = "task-meta";
 
   const pb = document.createElement("span");
-  pb.className = `task-badge badge-priority-${task.priority}`;
+  pb.className   = `task-badge badge-priority-${task.priority}`;
   pb.textContent = task.priority;
   meta.appendChild(pb);
 
   const sb = document.createElement("span");
-  sb.className = `task-badge badge-status-${task.status}`;
+  sb.className   = `task-badge badge-status-${task.status}`;
   sb.textContent = statusLabel(task.status);
   meta.appendChild(sb);
 
   if (task.due_date) {
     const due = document.createElement("span");
-    due.className = "task-due";
+    due.className   = "task-due";
     due.textContent = "Due: " + task.due_date;
     meta.appendChild(due);
   }
 
   body.appendChild(meta);
-  li.appendChild(body);
 
   const actions = document.createElement("div");
   actions.className = "task-actions";
 
   const editBtn = document.createElement("button");
-  editBtn.type = "button";
+  editBtn.type      = "button";
   editBtn.className = "btn btn-secondary btn-icon";
   editBtn.textContent = "Edit";
   editBtn.setAttribute("aria-label", "Edit task");
-  editBtn.addEventListener("click", () => openEditModal(task));
-  actions.appendChild(editBtn);
+  editBtn.addEventListener("click", (e) => { e.stopPropagation(); openEditModal(task); });
 
   const delBtn = document.createElement("button");
-  delBtn.type = "button";
+  delBtn.type      = "button";
   delBtn.className = "btn btn-danger btn-icon";
   delBtn.textContent = "Delete";
   delBtn.setAttribute("aria-label", "Delete task");
-  delBtn.addEventListener("click", () => handleDeleteTask(task.id));
+  delBtn.addEventListener("click", (e) => { e.stopPropagation(); handleDeleteTask(task.id); });
+
+  actions.appendChild(editBtn);
   actions.appendChild(delBtn);
 
+  // Mobile: tapping the body opens the detail screen
+  body.addEventListener("click", () => {
+    if (isMobile()) openTaskDetail(task);
+  });
+
+  // Chevron hint on mobile
+  const chev = document.createElement("span");
+  chev.className = "card-chevron task-chevron";
+  chev.setAttribute("aria-hidden", "true");
+  chev.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14"
+    viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="9 18 15 12 9 6"></polyline></svg>`;
+
+  li.appendChild(checkbox);
+  li.appendChild(body);
   li.appendChild(actions);
+  li.appendChild(chev);
   return li;
 }
 
 async function loadTasksForProject(projectId) {
   const sort = sortBy.value || undefined;
-  try {
-    // Uses the ORM relationship: tasks are fetched filtered by project_id
-    // which is wired via Task.project ←→ Project.tasks back_populates
-    currentTasks = await apiListTasks(projectId, sort);
+
+  // ── 1. Seed from cache immediately so the list never shows blank while
+  //       the network request is in flight (JSON.parse from localStorage).
+  const cached = getTaskCache(projectId);
+  if (cached.length) {
+    currentTasks = cached;
     renderTasks(currentTasks);
+  }
+
+  // ── 2. Fetch live data from the backend.
+  try {
+    const live = await apiListTasks(projectId, sort);
+    currentTasks = live;
+    renderTasks(currentTasks);
+    // ── 3. Persist the fresh list so the next load can seed from it.
+    setTaskCache(projectId, currentTasks);
   } catch (err) {
+    // If we already seeded from cache, leave that data visible.
+    if (!cached.length) renderTasksEmpty("Failed to load tasks.");
     showAlert("Could not load tasks: " + err.message, true);
-    renderTasksEmpty("Failed to load tasks.");
   }
 }
 
 async function loadProjectStats(projectId) {
   try {
-    const stats = await apiProjectStats(projectId);
+    const stats    = await apiProjectStats(projectId);
     statTotal.textContent = `Total: ${stats.total_tasks}`;
     const byStatus = Object.fromEntries(stats.by_status.map(r => [r.status, r.count]));
     statTodo.textContent = `To Do: ${byStatus.todo ?? 0}`;
     statIp.textContent   = `In Progress: ${byStatus.in_progress ?? 0}`;
     statDone.textContent = `Done: ${byStatus.done ?? 0}`;
-    projectStats.hidden = false;
+    projectStats.hidden  = false;
   } catch (_) {
     projectStats.hidden = true;
   }
@@ -727,8 +1241,6 @@ sortBy.addEventListener("change", async () => {
 });
 
 /* ── Search controls ────────────────────────────────────────────────────── */
-
-// Show ✕ clear button as soon as anything is typed; hide it when box is empty
 taskSearchInput.addEventListener("input", () => {
   btnSearchClear.hidden = taskSearchInput.value.trim() === "";
 });
@@ -757,26 +1269,21 @@ taskSearchInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") btnSearch.click();
 });
 
-/* ── Add task form ──────────────────────────────────────────────────────── */
-btnToggleTaskForm.addEventListener("click", () => {
-  togglePanel(taskCreateForm, btnToggleTaskForm);
-});
+/* ── Desktop add-task form ──────────────────────────────────────────────── */
+btnToggleTaskForm.addEventListener("click", () => togglePanel(taskCreateForm, btnToggleTaskForm));
+
 btnCancelTask.addEventListener("click", () => {
-  formNewTask.reset();
-  tTitleErr.textContent = "";
+  formNewTask.reset(); tTitleErr.textContent = "";
   togglePanel(taskCreateForm, btnToggleTaskForm);
 });
-// Close-X button at the top of the task form
 document.getElementById("btn-close-task-form").addEventListener("click", () => {
-  formNewTask.reset();
-  tTitleErr.textContent = "";
+  formNewTask.reset(); tTitleErr.textContent = "";
   togglePanel(taskCreateForm, btnToggleTaskForm);
 });
 
 formNewTask.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!validateField(tTitle, tTitleErr, "Title is required.")) return;
-
   try {
     const created = await apiCreateTask({
       title:       tTitle.value.trim(),
@@ -787,55 +1294,37 @@ formNewTask.addEventListener("submit", async (e) => {
       project_id:  selectedProjectId,
     });
     formNewTask.reset();
-    // Collapse the create form and reset the toggle button
-    taskCreateForm.hidden = true;
-    btnToggleTaskForm.setAttribute("aria-expanded", "false");
-
-    await loadTasksForProject(selectedProjectId);
+    if (isMobile()) closeMobileFormOverlay();
+    else { taskCreateForm.hidden = true; btnToggleTaskForm.setAttribute("aria-expanded","false"); }
+    await loadTasksForProject(selectedProjectId);   // already writes cache inside
     await loadProjectStats(selectedProjectId);
-
-    // Scroll the newly created task card into view
-    const newCard = taskListEl.querySelector(`[data-id="${created.id}"]`);
-    if (newCard) {
-      newCard.classList.add("task-new-flash");
-      newCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      newCard.addEventListener("animationend", () => newCard.classList.remove("task-new-flash"), { once: true });
-    }
-
+    _flashNewCard(created.id);
     toast("✦ Task created successfully!", "success");
   } catch (err) {
     showAlert("Could not add task: " + err.message, true);
   }
 });
 
+function _flashNewCard(id) {
+  const card = taskListEl.querySelector(`[data-id="${id}"]`);
+  if (!card) return;
+  card.classList.add("task-new-flash");
+  card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  card.addEventListener("animationend", () => card.classList.remove("task-new-flash"), { once: true });
+}
+
 /* ── Quick-Add form ─────────────────────────────────────────────────────── */
 formQuickAdd.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!validateField(qaDesc, qaDescErr, "Description is required.")) return;
-
   try {
-    const created = await apiQuickAdd({
-      description: qaDesc.value.trim(),
-      project_id:  selectedProjectId,
-    });
-    qaDesc.value = "";
-    qaDescErr.textContent = "";
-
-    // Collapse the whole create form (quick-add lives inside it)
-    taskCreateForm.hidden = true;
-    btnToggleTaskForm.setAttribute("aria-expanded", "false");
-
-    await loadTasksForProject(selectedProjectId);
+    const created = await apiQuickAdd({ description: qaDesc.value.trim(), project_id: selectedProjectId });
+    qaDesc.value = ""; qaDescErr.textContent = "";
+    if (isMobile()) closeMobileFormOverlay();
+    else { taskCreateForm.hidden = true; btnToggleTaskForm.setAttribute("aria-expanded","false"); }
+    await loadTasksForProject(selectedProjectId);   // already writes cache inside
     await loadProjectStats(selectedProjectId);
-
-    // Scroll the new task card into view and flash it green
-    const newCard = taskListEl.querySelector(`[data-id="${created.id}"]`);
-    if (newCard) {
-      newCard.classList.add("task-new-flash");
-      newCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      newCard.addEventListener("animationend", () => newCard.classList.remove("task-new-flash"), { once: true });
-    }
-
+    _flashNewCard(created.id);
     toast(`✦ Quick-Added: "${created.title}"`, "success");
   } catch (err) {
     showAlert("Quick-add failed: " + err.message, true);
@@ -848,37 +1337,199 @@ async function handleDeleteTask(id) {
   try {
     await apiDeleteTask(id);
     currentTasks = currentTasks.filter(t => t.id !== id);
+    setTaskCache(selectedProjectId, currentTasks);   // ← cache after delete
     renderTasks(currentTasks);
     await loadProjectStats(selectedProjectId);
+    if (isMobile() && mobileCurrentTask?.id === id) {
+      mobileCurrentTask = null;
+      popView();
+    }
     toast("Task deleted.", "info");
   } catch (err) {
     showAlert("Delete failed: " + err.message, true);
   }
 }
 
+/* ── FAB — Add Task (mobile) ────────────────────────────────────────────── */
+fabAddTask.addEventListener("click", () => {
+  const wrapper = document.createElement("div");
+  const h3 = document.createElement("h3");
+  h3.textContent = "New Task";
+  wrapper.appendChild(h3);
+
+  const form = document.createElement("form");
+  form.noValidate = true;
+  form.innerHTML = `
+    <div class="field-group">
+      <label for="mob-t-title">Title *</label>
+      <input type="text" id="mob-t-title" placeholder="Task title"
+             autocomplete="off" aria-required="true" />
+      <span class="field-error" id="mob-t-title-err" role="alert"></span>
+    </div>
+    <div class="field-group">
+      <label for="mob-t-desc">Description</label>
+      <input type="text" id="mob-t-desc" placeholder="Optional" autocomplete="off" />
+    </div>
+    <div class="field-group">
+      <label for="mob-t-priority">Priority</label>
+      <select id="mob-t-priority">
+        <option value="low">Low</option>
+        <option value="medium" selected>Medium</option>
+        <option value="high">High</option>
+      </select>
+    </div>
+    <div class="field-group">
+      <label for="mob-t-due">Due date</label>
+      <input type="date" id="mob-t-due" />
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Add Task</button>
+    </div>`;
+
+  const mTTitle    = form.querySelector("#mob-t-title");
+  const mTTitleErr = form.querySelector("#mob-t-title-err");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!validateField(mTTitle, mTTitleErr, "Title is required.")) return;
+    try {
+      const created = await apiCreateTask({
+        title:       mTTitle.value.trim(),
+        description: form.querySelector("#mob-t-desc").value.trim() || null,
+        priority:    form.querySelector("#mob-t-priority").value,
+        due_date:    form.querySelector("#mob-t-due").value || null,
+        status:      "todo",
+        project_id:  selectedProjectId,
+      });
+      closeMobileFormOverlay();
+      await loadTasksForProject(selectedProjectId);
+      await loadProjectStats(selectedProjectId);
+      _flashNewCard(created.id);
+      toast("✦ Task created!", "success");
+    } catch (err) {
+      showAlert("Could not add task: " + err.message, true);
+    }
+  });
+
+  wrapper.appendChild(form);
+  openMobileFormOverlay(wrapper);
+});
 
 /* ==========================================================================
-   Edit-task modal
+   TASK DETAIL SCREEN  (Screen 4 — mobile only)
+   ========================================================================== */
+
+function openTaskDetail(task) {
+  mobileCurrentTask = task;
+
+  // Populate fields
+  detailTitle.textContent        = task.title;
+  detailDescText.textContent     = task.description ?? "";
+  detailDue.textContent          = task.due_date ?? "—";
+  detailAssignedUser.textContent = selectedUserName    ?? "—";
+  detailProject.textContent      = selectedProjectTitle ?? "—";
+
+  // Priority badge
+  detailPriorityBadge.textContent = task.priority;
+  detailPriorityBadge.className   = `task-badge badge-priority-${task.priority}`;
+
+  // Status badge
+  detailStatusBadge.textContent = statusLabel(task.status);
+  detailStatusBadge.className   = `task-badge badge-status-${task.status}`;
+
+  // Status buttons — highlight current
+  detailStatusBtns.querySelectorAll(".detail-status-btn").forEach(btn => {
+    const pressed = btn.dataset.status === task.status;
+    btn.setAttribute("aria-pressed", String(pressed));
+  });
+
+  // Timeline
+  _buildTimeline(task);
+
+  // Show the screen
+  mobileTaskDetail.hidden = false;
+  pushView("detail");
+}
+
+function _buildTimeline(task) {
+  detailTimeline.innerHTML = "";
+
+  const events = [
+    { event: "Task created", time: "Just now" },
+    { event: `Priority set to ${task.priority}`, time: "" },
+    { event: `Status: ${statusLabel(task.status)}`, time: "" },
+  ];
+  if (task.due_date) events.push({ event: `Due date: ${task.due_date}`, time: "" });
+
+  events.forEach(({ event, time }) => {
+    const li = document.createElement("li");
+    li.className = "timeline-item";
+
+    const evEl = document.createElement("div");
+    evEl.className   = "timeline-event";
+    evEl.textContent = event;
+
+    li.appendChild(evEl);
+    if (time) {
+      const tEl = document.createElement("div");
+      tEl.className   = "timeline-time";
+      tEl.textContent = time;
+      li.appendChild(tEl);
+    }
+    detailTimeline.appendChild(li);
+  });
+}
+
+/* Status-change buttons in detail view */
+detailStatusBtns.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".detail-status-btn");
+  if (!btn || !mobileCurrentTask) return;
+  const newStatus = btn.dataset.status;
+  try {
+    const updated = await apiUpdateTask(mobileCurrentTask.id, { ...mobileCurrentTask, status: newStatus });
+    currentTasks = currentTasks.map(t => (t.id === updated.id ? updated : t));
+    setTaskCache(selectedProjectId, currentTasks);   // ← cache after status change
+    mobileCurrentTask = updated;
+    // Refresh badge + buttons
+    detailStatusBadge.textContent = statusLabel(updated.status);
+    detailStatusBadge.className   = `task-badge badge-status-${updated.status}`;
+    detailStatusBtns.querySelectorAll(".detail-status-btn").forEach(b => {
+      b.setAttribute("aria-pressed", String(b.dataset.status === updated.status));
+    });
+    renderTasks(currentTasks);
+    await loadProjectStats(selectedProjectId);
+    toast("Status updated.", "success");
+  } catch (err) {
+    showAlert("Update failed: " + err.message, true);
+  }
+});
+
+/* Delete from detail view */
+detailDeleteBtn.addEventListener("click", () => {
+  if (mobileCurrentTask) handleDeleteTask(mobileCurrentTask.id);
+});
+
+/* ==========================================================================
+   EDIT TASK MODAL  (shared desktop + mobile)
    ========================================================================== */
 function openEditModal(task) {
-  editTaskId.value        = task.id;
-  editTitle.value         = task.title;
-  editDesc.value          = task.description ?? "";
-  editPriority.value      = task.priority;
-  editStatus.value        = task.status;
-  editDue.value           = task.due_date ?? "";
+  editTaskId.value         = task.id;
+  editTitle.value          = task.title;
+  editDesc.value           = task.description ?? "";
+  editPriority.value       = task.priority;
+  editStatus.value         = task.status;
+  editDue.value            = task.due_date ?? "";
   editTitleErr.textContent = "";
   editTitle.removeAttribute("aria-invalid");
   editModal.showModal();
 }
 
-modalCloseX.addEventListener("click",  () => editModal.close());
+modalCloseX.addEventListener("click",   () => editModal.close());
 editCancelBtn.addEventListener("click", () => editModal.close());
 
 editForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!validateField(editTitle, editTitleErr, "Title is required.")) return;
-
   const id = Number(editTaskId.value);
   try {
     const updated = await apiUpdateTask(id, {
@@ -889,8 +1540,10 @@ editForm.addEventListener("submit", async (e) => {
       due_date:    editDue.value.trim() || null,
     });
     currentTasks = currentTasks.map(t => (t.id === id ? updated : t));
+    setTaskCache(selectedProjectId, currentTasks);   // ← cache after edit
     renderTasks(currentTasks);
     await loadProjectStats(selectedProjectId);
+    if (mobileCurrentTask?.id === id) openTaskDetail(updated);
     editModal.close();
     toast("Task updated.", "success");
   } catch (err) {
@@ -900,19 +1553,9 @@ editForm.addEventListener("submit", async (e) => {
 });
 
 /* ==========================================================================
-   Bootstrap — run once the DOM is ready
+   INIT — Bootstrap the app on first load
    ========================================================================== */
-async function bootstrap() {
-  headerStatus.textContent = "Connecting…";
-  try {
-    await apiFetch("/");   // health-check
-    headerStatus.textContent = "Connected";
-    setTimeout(() => { headerStatus.textContent = ""; }, 2000);
-  } catch (_) {
-    headerStatus.textContent = "Backend unavailable";
-    showAlert("Cannot reach the backend at " + API_BASE + ". Is it running?", true);
-  }
+(async function init() {
+  applyMobileLayout();
   await loadUsers();
-}
-
-document.addEventListener("DOMContentLoaded", bootstrap);
+})();

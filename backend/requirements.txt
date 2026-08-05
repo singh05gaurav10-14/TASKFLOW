@@ -5,4 +5,7 @@ pydantic==2.12.5
 email-validator==2.3.0
 python-dotenv==1.0.1
 
-psycopg2-binary==2.9.10
+# psycopg2-binary is only needed when DATABASE_URL points at PostgreSQL.
+# For the default SQLite setup (DATABASE_URL=sqlite:///./app.db) you can
+# leave this commented out — SQLite support is built into Python.
+# psycopg2-binary==2.9.10
