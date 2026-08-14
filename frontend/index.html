@@ -9,7 +9,19 @@
 <body>
 
   <!-- ═══════════════════════════════════════════════════════════════════
-       STICKY HEADER
+       MOBILE HEADER (visible only on small screens)
+       ═══════════════════════════════════════════════════════════════════ -->
+  <header class="mobile-header" role="banner" aria-label="Mobile navigation header">
+    <button id="mobile-back-btn" class="btn btn-icon-only mobile-back" aria-label="Go back" hidden>‹</button>
+    <div class="mobile-header-center">
+      <h1 id="mobile-header-title" class="mobile-title">TaskFlow</h1>
+      <p id="mobile-breadcrumb" class="mobile-breadcrumb"></p>
+    </div>
+    <p id="mobile-header-status" class="mobile-header-status" aria-live="polite" aria-atomic="true"></p>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       STICKY HEADER (desktop)
        ═══════════════════════════════════════════════════════════════════ -->
   <header class="site-header" role="banner">
     <div class="header-inner">
@@ -44,12 +56,12 @@
   <!-- ═══════════════════════════════════════════════════════════════════
        THREE-PANEL WORKSPACE
        ═══════════════════════════════════════════════════════════════════ -->
-  <div class="workspace">
+  <div id="workspace" class="workspace">
 
     <!-- ─────────────────────────────────────────────────────────────────
          PANEL 1 — USERS
          ───────────────────────────────────────────────────────────────── -->
-    <aside class="panel panel-users" aria-label="Users panel">
+    <aside id="panel-users" class="panel panel-users" aria-label="Users panel">
       <div class="panel-header">
         <h2 class="panel-title">Users</h2>
         <button id="btn-toggle-user-form"
@@ -94,7 +106,7 @@
     <!-- ─────────────────────────────────────────────────────────────────
          PANEL 2 — PROJECTS
          ───────────────────────────────────────────────────────────────── -->
-    <aside class="panel panel-projects" aria-label="Projects panel">
+    <aside id="panel-projects" class="panel panel-projects" aria-label="Projects panel">
       <div class="panel-header">
         <h2 class="panel-title">Projects</h2>
         <button id="btn-toggle-project-form"
@@ -137,9 +149,9 @@
     <!-- ─────────────────────────────────────────────────────────────────
          PANEL 3 — TASKS
          ───────────────────────────────────────────────────────────────── -->
-    <section class="panel panel-tasks" aria-label="Tasks panel">
+    <section id="panel-tasks" class="panel panel-tasks" aria-label="Tasks panel">
       <div class="panel-header">
-        <h2 class="panel-title">Tasks</h2>
+        <h2 class="panel-title">Tasks <span id="task-count" class="task-count-chip" hidden></span></h2>
         <button id="btn-toggle-task-form"
                 class="btn btn-icon-only btn-add"
                 aria-expanded="false"
@@ -321,6 +333,43 @@
 
   <!-- Toast notification stack -->
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       MOBILE TASK DETAIL VIEW
+       ═══════════════════════════════════════════════════════════════════ -->
+  <div id="mobile-task-detail" class="mobile-task-detail" hidden aria-label="Task detail">
+    <h2 id="detail-title" class="detail-title"></h2>
+    <div class="detail-badges">
+      <span id="detail-priority-badge" class="priority-badge"></span>
+      <span id="detail-status-badge"   class="status-badge"></span>
+    </div>
+    <p id="detail-desc-text" class="detail-desc"></p>
+    <div class="detail-meta">
+      <span id="detail-due"           class="detail-due"></span>
+      <span id="detail-assigned-user" class="detail-assigned"></span>
+      <span id="detail-project"       class="detail-project"></span>
+    </div>
+    <div id="detail-status-buttons" class="detail-status-btns"></div>
+    <div id="detail-timeline"        class="detail-timeline"></div>
+    <button id="detail-delete-btn" class="btn btn-danger btn-sm">Delete task</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       FLOATING ACTION BUTTONS (mobile)
+       ═══════════════════════════════════════════════════════════════════ -->
+  <div id="fab-container" class="fab-container" hidden>
+    <button id="fab-add-user"    class="fab" aria-label="Add user"    hidden>+ User</button>
+    <button id="fab-add-project" class="fab" aria-label="Add project" hidden>+ Project</button>
+    <button id="fab-add-task"    class="fab" aria-label="Add task"    hidden>+ Task</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       MOBILE FORM OVERLAY (bottom sheet)
+       ═══════════════════════════════════════════════════════════════════ -->
+  <div id="mobile-form-overlay" class="mobile-form-overlay" hidden aria-modal="true" role="dialog">
+    <div class="mobile-form-overlay-backdrop"></div>
+    <div id="mobile-form-inner" class="mobile-form-inner"></div>
+  </div>
 
   <script src="app.js"></script>
 </body>
