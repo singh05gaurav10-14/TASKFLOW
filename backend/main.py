@@ -8,7 +8,7 @@ Responsibilities:
   3. Configure CORS to accept requests from the frontend dev server
      (http://localhost:5500 and http://127.0.0.1:5500) with an explicit
      list of allowed methods and headers.
-  4. Mount all routers: users, projects, tasks, stats.
+  4. Mount all routers: users, projects, tasks, stats  .
 
 Run with:
     uvicorn main:app --reload --port 8000
