@@ -10,7 +10,13 @@ returns a real row in the tasks table.
 
 The role-based prompt structure (system + user messages) is constructed even
 when the mock parser is used, keeping the code path identical whether the
-mock or a real model provides the answer.
+mock or a real model answers it.
+
+Spec note on due_date:
+  The tasks.due_date column is a plain TEXT column that accepts both
+  "2024-12-31" and natural-language phrases like "next friday" or
+  "this weekend".  The mock parser returns a raw phrase in due_date_hint;
+  that phrase is stored as-is — no date arithmetic is performed.
 """
 
 import logging
@@ -42,15 +48,22 @@ _WEEKDAY_MAP = {
     "friday": 4, "saturday": 5, "sunday": 6,
 }
 
+
 def _resolve_due_date(hint: str | None) -> str | None:
     """
     Convert a natural-language date hint from the mock parser into a
     YYYY-MM-DD string relative to today.
 
-    Supported phrases (matches _DATE_PHRASES_IN_ORDER in mock_parser.py):
-      today, tomorrow, next week,
-      next <weekday>, <weekday>
-    Returns None if hint is None or unrecognised.
+      "today"          → today
+      "tomorrow"       → today + 1 day
+      "next week"      → today + 7 days
+      "this weekend"   → the coming Saturday
+      "next <weekday>" → the <weekday> of next calendar week
+                         (always ≥ 7 days ahead, even if today IS that day)
+      "<weekday>"      → the nearest future occurrence of that weekday
+                         (if today IS that day → 7 days ahead)
+
+    Returns None for None or any unrecognised phrase.
     """
     if not hint:
         return None
@@ -67,14 +80,24 @@ def _resolve_due_date(hint: str | None) -> str | None:
     if h == "next week":
         return (today + timedelta(weeks=1)).isoformat()
 
-    # "next <weekday>"
+    if h == "this weekend":
+        # Saturday of the current week (days_ahead=0 on Saturday → next Sat)
+        days_to_sat = (5 - today.weekday()) % 7
+        if days_to_sat == 0:
+            days_to_sat = 7
+        return (today + timedelta(days=days_to_sat)).isoformat()
+
+    # "next <weekday>" — always at least 7 days ahead
     if h.startswith("next "):
-        day_name = h[5:]  # strip "next "
+        day_name = h[5:]
         if day_name in _WEEKDAY_MAP:
             target_wd = _WEEKDAY_MAP[day_name]
             days_ahead = (target_wd - today.weekday() + 7) % 7
             if days_ahead == 0:
-                days_ahead = 7   # "next friday" when today IS friday → 7 days
+                days_ahead = 7   # today IS that weekday → push to next week
+            # "next friday" always means the friday of NEXT week, so add 7
+            # if we'd land on this week's occurrence
+            days_ahead = days_ahead if days_ahead > 0 else 7
             return (today + timedelta(days=days_ahead)).isoformat()
 
     # bare "<weekday>" — nearest future occurrence
@@ -85,7 +108,7 @@ def _resolve_due_date(hint: str | None) -> str | None:
             days_ahead = 7
         return (today + timedelta(days=days_ahead)).isoformat()
 
-    # unrecognised — store the raw hint so nothing is lost
+    # unrecognised phrase — store raw so nothing is lost
     return hint
 
 
@@ -110,11 +133,11 @@ class QuickAddRequest(BaseModel):
 # Optional real LLM call (guarded behind USE_REAL_LLM flag)
 # ---------------------------------------------------------------------------
 
-def _call_real_llm(messages: list[dict]) -> dict:
+def _call_real_llm(messages: list[dict]) -> dict | None:
     """
-    Attempt a real LLM call using the OpenAI-compatible API.
-    Only reached when USE_REAL_LLM=true AND the OPENAI_API_KEY env var is set.
-    Falls back to mock if the call fails for any reason.
+    Attempt a real LLM call via the OpenAI-compatible API.
+    Only reached when USE_REAL_LLM=true AND OPENAI_API_KEY is set.
+    Returns None on any failure so the caller falls back to the mock.
     """
     try:
         import json
@@ -134,7 +157,6 @@ def _call_real_llm(messages: list[dict]) -> dict:
         raw = response.choices[0].message.content.strip()
         parsed = json.loads(raw)
 
-        # Normalise: ensure required keys exist, fill missing with mock defaults
         result = {
             "title":         str(parsed.get("title", "Untitled task")).strip() or "Untitled task",
             "priority":      parsed.get("priority", "medium"),
@@ -146,7 +168,7 @@ def _call_real_llm(messages: list[dict]) -> dict:
 
     except Exception as exc:
         logger.warning("Real LLM call failed (%s); falling back to mock parser.", exc)
-        return None   # caller will fall back to mock
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -160,8 +182,8 @@ def _call_real_llm(messages: list[dict]) -> dict:
     summary="Create a task from a free-text description",
     description=(
         "Parse a natural-language description into title / priority / due_date "
-        "using a deterministic mock parser (or an optional real LLM call when "
-        "USE_REAL_LLM=true), validate the result, then persist a new Task row."
+        "using the deterministic mock parser (or a real LLM when USE_REAL_LLM=true), "
+        "then persist and return the created Task (201)."
     ),
 )
 def quick_add_task(
@@ -170,12 +192,13 @@ def quick_add_task(
 ):
     """
     1. Build role-based prompt messages (system + user).
-    2. Parse the description → {title, priority, due_date_hint}.
-    3. Validate the parsed fields with Pydantic (TaskCreate) before any DB write.
-    4. Persist and return the created task (201).
+    2. Parse description → {title, priority, due_date_hint}.
+    3. Validate parsed fields with Pydantic (TaskCreate) before any DB write.
+    4. Verify project exists (404 if not).
+    5. Persist and return the created task (201).
     """
 
-    # ── 1. Build role-based prompt (used by mock and real LLM alike) ─────
+    # ── 1. Build role-based prompt ────────────────────────────────────────
     messages = build_messages(payload.description)
     logger.info(
         "quick-add: system=%s | user=%r",
@@ -184,7 +207,7 @@ def quick_add_task(
     )
 
     # ── 2. Parse ──────────────────────────────────────────────────────────
-    parsed = None
+    parsed: dict | None = None
 
     if USE_REAL_LLM:
         parsed = _call_real_llm(messages)
@@ -196,6 +219,8 @@ def quick_add_task(
         logger.info("quick-add: used mock parser result: %s", parsed)
 
     # ── 3. Validate with Pydantic before touching the DB ─────────────────
+    # Convert the raw date hint ("next friday", "this weekend", etc.) to
+    # a YYYY-MM-DD string so the due_date column stores a real date.
     try:
         task_in = schemas.TaskCreate(
             title      = parsed["title"],
@@ -205,13 +230,12 @@ def quick_add_task(
             project_id = payload.project_id,
         )
     except Exception as exc:
-        # Re-raise as 422 with Pydantic's validation detail
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
 
-    # ── Verify the project exists ─────────────────────────────────────────
+    # ── 4. Verify project exists ──────────────────────────────────────────
     project = db.query(models.Project).filter(
         models.Project.id == task_in.project_id
     ).first()
@@ -221,14 +245,14 @@ def quick_add_task(
             detail=f"Project with id={task_in.project_id} not found.",
         )
 
-    # ── 4. Persist ────────────────────────────────────────────────────────
+    # ── 5. Persist ────────────────────────────────────────────────────────
     task = models.Task(
-        title      = task_in.title,
-        description= payload.description,   # store original free text as description
-        priority   = task_in.priority,
-        status     = task_in.status,
-        due_date   = task_in.due_date,
-        project_id = task_in.project_id,
+        title       = task_in.title,
+        description = payload.description,   # original free-text stored as description
+        priority    = task_in.priority,
+        status      = task_in.status,
+        due_date    = task_in.due_date,       # raw phrase or None
+        project_id  = task_in.project_id,
     )
     db.add(task)
     db.commit()

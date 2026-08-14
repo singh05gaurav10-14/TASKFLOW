@@ -236,7 +236,18 @@ async function apiFetch(path, options = {}) {
   });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
-    try { const b = await res.json(); detail = b.detail ?? JSON.stringify(b); } catch (_) {}
+    try {
+      const b = await res.json();
+      if (typeof b.detail === "string") {
+        // e.g. "User with id=5 not found."
+        detail = b.detail;
+      } else if (Array.isArray(b.detail)) {
+        // FastAPI 422 — detail is an array of {loc, msg, type} objects
+        detail = b.detail.map(e => e.msg ?? JSON.stringify(e)).join("; ");
+      } else if (b.detail !== undefined) {
+        detail = JSON.stringify(b.detail);
+      }
+    } catch (_) {}
     throw new Error(detail);
   }
   if (res.status === 204) return null;

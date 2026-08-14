@@ -11,94 +11,117 @@ Returns a dict with three keys:
     {
         "title":          str,   # never empty; falls back to "Untitled task"
         "priority":       str,   # exactly one of "low" | "medium" | "high"
-        "due_date_hint":  str | None
+        "due_date_hint":  str | None   # raw phrase, lower-case, stored as-is
     }
+
+Algorithm (follows spec exactly):
+
+  a. Build lower_desc = description.lower() for keyword matching only;
+     keep the original-cased description untouched for the title step (d).
+
+  b. Priority — substring check on lower_desc, group (i) before group (ii):
+       (i)  contains "urgent" or "asap"              → "high"
+       (ii) contains "whenever" or "low priority"    → "low"
+       (iii) neither matched                          → "medium"
+     Group (i) wins if both groups are present.
+
+  c. Due-date hint — first matching phrase wins (checked in spec order):
+       "today", "tomorrow", "next week",
+       "this weekend",
+       "next monday" … "next sunday"  (Mon→Sun order, whole two-word span),
+       "monday" … "sunday"            (Mon→Sun, bare names, only if no
+                                       "next <day>" matched above).
+     Stored as the exact lower-case matched phrase, or null if nothing matches.
+
+  d. Title — start from original-cased description.
+     Strip every occurrence of EVERY group-(i) and group-(ii) keyword found
+     anywhere in lower_desc (not just the one that decided priority), PLUS
+     every occurrence of the matched date phrase from step (c).
+     Stripping uses whole-word / whole-phrase boundaries so that "urgent"
+     is stripped from "fix urgent now" but "urgently" is stripped completely
+     as its own keyword, not as "urgent" + leftover "ly".
+     Collapse runs of spaces, .strip(), and fall back to "Untitled task" if
+     the result is empty or whitespace-only.
 """
 
 import re
 
 # ---------------------------------------------------------------------------
-# Keyword tables (order matters for priority; iteration order == match order)
+# Priority keyword tables
 # ---------------------------------------------------------------------------
 
-# Group (i) — HIGH priority keywords
-_HIGH_KEYWORDS = ["urgent", "asap"]
+# Group (i) — HIGH
+# Detection uses plain substring match (spec: "contains 'urgent' or 'asap'")
+# so "urgently" also triggers high.  Stripping uses the longest-first list
+# so "urgently" is stripped as a whole word before the shorter "urgent" rule
+# runs, preventing any "ly" residue in the title.
+_HIGH_KEYWORDS_DETECT = ["urgent", "asap"]          # for substring detection
+_HIGH_KEYWORDS_STRIP  = ["urgently", "urgent", "asap"]  # longest first for stripping
 
-# Group (ii) — LOW priority keywords
+# Group (ii) — LOW
 _LOW_KEYWORDS = ["whenever", "low priority"]
 
-# Date phrases checked in order (two-word "next <day>" phrases first so they
-# consume the whole span before the bare-weekday pass)
+# ---------------------------------------------------------------------------
+# Date-phrase table  (checked in this exact order — first match wins)
+# ---------------------------------------------------------------------------
+
 _NEXT_DAY_PHRASES = [
-    "next monday",
-    "next tuesday",
-    "next wednesday",
-    "next thursday",
-    "next friday",
-    "next saturday",
-    "next sunday",
+    "next monday", "next tuesday", "next wednesday", "next thursday",
+    "next friday", "next saturday", "next sunday",
 ]
 
 _BARE_DAY_NAMES = [
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
-    "sunday",
+    "monday", "tuesday", "wednesday", "thursday",
+    "friday", "saturday", "sunday",
 ]
 
-# All date keywords in the order the spec requires them checked:
-#   1. "today"
-#   2. "tomorrow"
-#   3. "next week"
-#   4. next-<weekday> phrases (Mon → Sun)
-#   5. bare day names (Mon → Sun)
 _DATE_PHRASES_IN_ORDER = (
-    ["today", "tomorrow", "next week"]
+    ["today", "tomorrow", "next week", "this weekend"]
     + _NEXT_DAY_PHRASES
     + _BARE_DAY_NAMES
 )
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-def _remove_all_occurrences(text: str, phrase: str) -> str:
+def _strip_pattern(phrase: str) -> re.Pattern:
     """
-    Remove every case-insensitive occurrence of *phrase* from *text*,
-    matching it as a literal string (not a regex), then return the result.
+    Regex that matches *phrase* as a whole word / whole phrase so that
+    stripping "urgent" does not eat part of "urgently", and stripping
+    "next friday" consumes the full two-word span.
 
-    We use re.sub with re.IGNORECASE so that spans like "ASAP", "Asap", and
-    "asap" all get stripped from the original-cased title string.
+    (?<!\w) / (?!\w) are zero-width assertions that ensure the phrase is
+    not surrounded by word characters on either side.
     """
-    return re.sub(re.escape(phrase), "", text, flags=re.IGNORECASE)
+    return re.compile(
+        r"(?<!\w)" + re.escape(phrase) + r"(?!\w)",
+        re.IGNORECASE,
+    )
+
+
+# Pre-compile all strip patterns (called on every parse() invocation).
+_HIGH_STRIP_PATTERNS = [(_strip_pattern(kw), kw) for kw in _HIGH_KEYWORDS_STRIP]
+_LOW_STRIP_PATTERNS  = [(_strip_pattern(kw), kw) for kw in _LOW_KEYWORDS]
+_DATE_STRIP_PATTERNS = {p: _strip_pattern(p) for p in _DATE_PHRASES_IN_ORDER}
 
 
 def parse(description: str) -> dict:
     """
-    Apply the deterministic mock-parser algorithm to *description* and return
-    a dict with title, priority, and due_date_hint.
+    Parse *description* and return::
 
-    Algorithm (follows spec exactly):
-
-    a. Build lower_desc = description.lower() for keyword matching.
-       Keep *description* untouched for the title step.
-
-    b. Priority — check lower_desc for group (i) / (ii) in order; first match wins.
-
-    c. Due-date hint — check lower_desc for date phrases in the required order;
-       first match wins.
-
-    d. Title — strip from original-cased *description* every occurrence of
-       every group (i)/(ii) keyword found anywhere in lower_desc, PLUS every
-       occurrence of the matched date phrase (if any). .strip() the result.
-       If empty/whitespace-only → "Untitled task".
+        {
+            "title":         str,         # cleaned title, never empty
+            "priority":      str,         # "low" | "medium" | "high"
+            "due_date_hint": str | None,  # raw matched phrase or None
+        }
     """
 
     # ── a. Lower-cased working copy ────────────────────────────────────────
     lower_desc = description.lower()
 
-    # ── b. Priority ────────────────────────────────────────────────────────
-    has_high = any(kw in lower_desc for kw in _HIGH_KEYWORDS)
+    # ── b. Priority — plain substring detection (spec: "contains …") ──────
+    has_high = any(kw in lower_desc for kw in _HIGH_KEYWORDS_DETECT)
     has_low  = any(kw in lower_desc for kw in _LOW_KEYWORDS)
 
     if has_high:
@@ -108,32 +131,34 @@ def parse(description: str) -> dict:
     else:
         priority = "medium"
 
-    # ── c. Due-date hint ───────────────────────────────────────────────────
-    due_date_hint = None
+    # ── c. Due-date hint — first whole-phrase match wins ───────────────────
+    due_date_hint: str | None = None
     for phrase in _DATE_PHRASES_IN_ORDER:
-        if phrase in lower_desc:
-            due_date_hint = phrase   # store as lower-case matched text
+        # Use whole-phrase match so "next friday" is not split into
+        # "next" + bare "friday", and "this weekend" is matched as one span.
+        if _DATE_STRIP_PATTERNS[phrase].search(lower_desc):
+            due_date_hint = phrase   # exact lower-case phrase
             break
 
-    # ── d. Title ───────────────────────────────────────────────────────────
-    # Start from the original-cased description.
+    # ── d. Title — strip keywords then clean up whitespace ─────────────────
     title = description
 
-    # Strip every occurrence of every group (i) keyword found anywhere
-    for kw in _HIGH_KEYWORDS:
-        if kw in lower_desc:
-            title = _remove_all_occurrences(title, kw)
+    # Strip ALL group-(i) keywords found anywhere (whole-word, longest first)
+    for pattern, kw in _HIGH_STRIP_PATTERNS:
+        if kw in lower_desc:                 # quick pre-check before regex
+            title = pattern.sub("", title)
 
-    # Strip every occurrence of every group (ii) keyword found anywhere
-    for kw in _LOW_KEYWORDS:
+    # Strip ALL group-(ii) keywords found anywhere (whole-phrase)
+    for pattern, kw in _LOW_STRIP_PATTERNS:
         if kw in lower_desc:
-            title = _remove_all_occurrences(title, kw)
+            title = pattern.sub("", title)
 
-    # Strip every occurrence of the matched date phrase (if any)
+    # Strip every occurrence of the matched date phrase
     if due_date_hint is not None:
-        title = _remove_all_occurrences(title, due_date_hint)
+        title = _DATE_STRIP_PATTERNS[due_date_hint].sub("", title)
 
-    title = title.strip()
+    # Collapse multiple spaces left by removals, then strip ends
+    title = re.sub(r" {2,}", " ", title).strip()
     if not title:
         title = "Untitled task"
 
@@ -145,7 +170,7 @@ def parse(description: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Role-based prompt construction (mirrors what a real LLM call would use)
+# Role-based prompt construction
 # ---------------------------------------------------------------------------
 
 SYSTEM_MESSAGE = (
@@ -153,22 +178,23 @@ SYSTEM_MESSAGE = (
     "Given a free-text task description, extract exactly three fields and "
     "respond with a JSON object containing only these keys:\n"
     '  "title"         : the task description with priority/date keywords removed, '
-    "trimmed; use \"Untitled task\" if nothing remains.\n"
+    'trimmed; use "Untitled task" if nothing remains.\n'
     '  "priority"      : one of "low", "medium", or "high". '
-    'Use "high" if the text contains "urgent" or "asap"; '
+    'Use "high" if the text contains "urgent" or "asap" (including "urgently"); '
     '"low" if it contains "whenever" or "low priority"; '
     'otherwise "medium".\n'
-    '  "due_date_hint" : the first date phrase found in the text '
-    '("today", "tomorrow", "next week", "next monday" … "next sunday", '
-    '"monday" … "sunday"), lower-case, or null if none is present.\n'
+    '  "due_date_hint" : the first date phrase found in the text — one of '
+    '"today", "tomorrow", "next week", "this weekend", '
+    '"next monday" … "next sunday", "monday" … "sunday" — '
+    'lower-case, or null if none is present.\n'
     "Return only the JSON object — no prose, no markdown fences."
 )
 
 
 def build_messages(description: str) -> list[dict]:
     """
-    Build the role-based message list used for an LLM call (or logged
-    alongside the mock result so the code path looks the same either way).
+    Build the role-based message list used by the endpoint
+    (identical structure whether mock or real LLM answers).
 
     Returns:
         [
