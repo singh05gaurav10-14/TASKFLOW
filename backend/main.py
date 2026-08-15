@@ -10,7 +10,7 @@ Responsibilities:
      list of allowed methods and headers.
   4. Mount all routers: users, projects, tasks, stats  .
 
-Run with:
+Run with:  
     uvicorn main:app --reload --port 8000
 """
 
